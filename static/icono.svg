@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Levantamiento de Procesos">
+  <defs>
+    <linearGradient id="fondo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1B3550"/>
+      <stop offset="100%" stop-color="#0E1C2B"/>
+    </linearGradient>
+    <linearGradient id="aro" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7FC0D8"/>
+      <stop offset="100%" stop-color="#4E8AA6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Lámina de fondo -->
+  <rect width="512" height="512" rx="112" fill="url(#fondo)"/>
+
+  <!-- Hoja del proceso, apenas insinuada detrás de la lupa -->
+  <g opacity="0.22">
+    <rect x="120" y="96" width="196" height="256" rx="20" fill="none" stroke="#CFE3EC" stroke-width="14"/>
+  </g>
+
+  <!-- Renglones: el proceso que se está levantando -->
+  <g stroke="#8FB6C9" stroke-width="17" stroke-linecap="round" opacity="0.5">
+    <line x1="158" y1="152" x2="278" y2="152"/>
+    <line x1="158" y1="200" x2="252" y2="200"/>
+  </g>
+
+  <!-- Lupa -->
+  <circle cx="236" cy="252" r="106" fill="#0E1C2B" fill-opacity="0.55"/>
+  <circle cx="236" cy="252" r="106" fill="none" stroke="url(#aro)" stroke-width="30"/>
+
+  <!-- Renglones dentro del lente, el último resaltado -->
+  <g stroke-linecap="round">
+    <line x1="188" y1="220" x2="292" y2="220" stroke="#DCEBF2" stroke-width="18"/>
+    <line x1="188" y1="262" x2="268" y2="262" stroke="#DCEBF2" stroke-width="18"/>
+    <line x1="188" y1="304" x2="240" y2="304" stroke="#E8B931" stroke-width="18"/>
+  </g>
+
+  <!-- Mango -->
+  <line x1="314" y1="330" x2="404" y2="420" stroke="#0E1C2B" stroke-width="56" stroke-linecap="round"/>
+  <line x1="314" y1="330" x2="404" y2="420" stroke="url(#aro)" stroke-width="34" stroke-linecap="round"/>
+</svg>

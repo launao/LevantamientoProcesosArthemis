@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{% if datos %}{{ datos.proceso.nombre }}{% else %}Informe no disponible{% endif %}</title>
+<meta name="theme-color" content="#112236">
+{% if datos %}
+<meta property="og:title" content="{{ datos.proceso.nombre }}">
+<meta property="og:description" content="Levantamiento al {{ datos.avance }}% · {{ datos.totales.fotos }} fotos · {{ datos.totales.audios }} notas de voz">
+<meta property="og:type" content="article">
+{% endif %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="{{ url_for('static', filename='icono.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='icono-192.png') }}" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icono-180.png') }}">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Procesos">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+<style>
+  body{background:var(--surface-2)}
+  .inf{max-width:760px;margin:0 auto;padding:0 0 60px;background:var(--surface);min-height:100vh}
+  .cab{padding:26px 22px 20px;border-bottom:1px solid var(--line);
+       background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 12%,var(--surface)),var(--surface))}
+  .cab .org{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+  .cab h1{margin:8px 0 6px;font-size:24px;letter-spacing:-.5px;line-height:1.2}
+  .cab .meta{color:var(--ink-2);font-size:14px}
+  .resumen{display:flex;gap:20px;flex-wrap:wrap;margin-top:18px;font-size:13px;color:var(--ink-2)}
+  .resumen b{display:block;font-size:19px;color:var(--ink);font-weight:700}
+  .cuerpo{padding:0 22px}
+  .sx{padding:26px 0 6px}
+  .sx h2{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--accent);
+         font-weight:700;margin:0 0 4px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  .cx{padding:18px 0;border-bottom:1px solid var(--line)}
+  .cx:last-child{border-bottom:0}
+  .cx h3{margin:0 0 8px;font-size:15px;font-weight:600}
+  .cx .txt{white-space:pre-wrap;color:var(--ink-2);line-height:1.65}
+  .cx .txt ul{margin:6px 0;padding-left:22px;white-space:normal}
+  .cx .txt mark{background:#FFE79A;color:#3a2c00;padding:0 2px;border-radius:3px}
+  .pasos{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}
+  .pasos th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;
+            color:var(--ink-3);padding:7px 9px;border-bottom:1px solid var(--line)}
+  .pasos td{padding:9px;border-bottom:1px solid var(--line);vertical-align:top}
+  .pasos td:first-child{color:var(--ink-3);font-weight:600;width:28px}
+  .pasos tr.det td{padding-top:0;border-bottom:1px solid var(--line)}
+  .det-txt{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-size:13px;
+           line-height:1.6;color:var(--ink-2);white-space:pre-wrap;margin-bottom:6px}
+  .det-subs{margin:0;padding-left:20px;font-size:13px;color:var(--ink-2);line-height:1.7}
+  .evid{margin-top:14px;display:flex;flex-direction:column;gap:12px}
+  .foto{border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+  .foto img{display:block;width:100%}
+  .pie{font-size:12px;color:var(--ink-3);padding:7px 10px;background:var(--surface-2)}
+  .audio{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--surface-2)}
+  .audio .t{font-size:13px;font-weight:600;margin-bottom:8px;display:flex;gap:8px;align-items:center}
+  .audio audio{width:100%;height:40px}
+  .marca{display:inline-block;font-size:11px;color:var(--ink-3);margin-top:5px}
+  .sueltas{padding:22px;background:var(--surface-2);border-radius:12px;margin:26px 0}
+  .fin{padding:26px 22px;color:var(--ink-3);font-size:12px;text-align:center;border-top:1px solid var(--line);margin-top:20px}
+  @media print{
+    body{background:#fff}
+    .audio{page-break-inside:avoid}
+    .audio audio{display:none}
+    .audio:after{content:'▶ Audio disponible en la versión web del informe';font-size:12px;color:#666}
+  }
+</style>
+</head>
+<body>
+{% if not datos %}
+  <div class="inf"><div class="empty" style="padding-top:110px">
+    <span class="e">⚠</span>Este informe ya no está disponible.<br>
+    <span class="tiny">Pide un enlace nuevo a quien te lo compartió.</span>
+  </div></div>
+{% else %}
+<div class="inf">
+  <div class="cab">
+    {% if datos.organizacion %}<div class="org">{{ datos.organizacion }}</div>{% endif %}
+    <h1>{{ datos.proceso.nombre }}</h1>
+    <div class="meta">
+      {% if datos.proceso.codigo %}{{ datos.proceso.codigo }}{% endif %}
+      {% if datos.proceso.area %} · {{ datos.proceso.area }}{% endif %}
+      · Levantado por {{ datos.proceso.responsable }}
+    </div>
+    <div class="resumen">
+      <div><b>{{ datos.avance }}%</b>completo</div>
+      <div><b>{{ datos.totales.fotos }}</b>fotos</div>
+      <div><b>{{ datos.totales.audios }}</b>notas de voz</div>
+      {% if datos.proceso.enviado %}<div><b>{{ datos.proceso.enviado[:10] }}</b>enviado</div>{% endif %}
+    </div>
+    {% if datos.ultimo_envio and datos.ultimo_envio.resumen %}
+      <div class="banner" style="margin:18px 0 0">{{ datos.ultimo_envio.resumen }}</div>
+    {% endif %}
+  </div>
+
+  <div class="cuerpo">
+    {% for sec in datos.secciones %}
+      <div class="sx"><h2>{{ sec.nombre }}</h2></div>
+      {% for c in sec.campos %}
+        <div class="cx">
+          <h3>{{ c.etiqueta }}</h3>
+
+          {% if c.tipo == 'pasos' and c.valor %}
+            <table class="pasos">
+              <thead><tr><th></th><th>Actividad</th><th>Responsable</th><th>Sistema</th><th>Tiempo</th></tr></thead>
+              <tbody>
+              {% for r in c.valor %}{% if r.actividad %}
+                <tr><td>{{ loop.index }}</td><td>{{ r.actividad }}</td>
+                    <td>{{ r.responsable or '—' }}</td><td>{{ r.sistema or '—' }}</td>
+                    <td>{{ r.tiempo or '—' }}</td></tr>
+                {% if r.detalle or r.subtareas %}
+                <tr class="det"><td></td><td colspan="4">
+                  {% if r.detalle %}<div class="det-txt">{{ r.detalle | safe }}</div>{% endif %}
+                  {% if r.subtareas %}<ul class="det-subs">
+                    {% for t in r.subtareas %}{% if t %}<li>{{ t }}</li>{% endif %}{% endfor %}
+                  </ul>{% endif %}
+                </td></tr>
+                {% endif %}
+              {% endif %}{% endfor %}
+              </tbody>
+            </table>
+          {% elif c.tipo == 'multi' and c.valor %}
+            <div class="txt">{{ c.valor | join(' · ') }}</div>
+          {% elif c.tipo == 'persona' and c.valor %}
+            <div class="txt">{{ c.nombres.get(c.valor, '—') }}</div>
+          {% elif c.tipo == 'si_no' and c.valor %}
+            <div class="txt">{{ 'Sí' if c.valor == 'si' else 'No' }}</div>
+          {% elif c.valor %}
+            <div class="txt">{{ c.valor | safe }}</div>
+          {% else %}
+            <div class="txt mut"><i>Sin respuesta escrita — ver evidencia abajo.</i></div>
+          {% endif %}
+
+          {% if c.evidencias %}
+          <div class="evid">
+            {% for e in c.evidencias %}
+              {% if e.tipo == 'foto' %}
+                <figure class="foto" style="margin:0">
+                  <img src="/r/{{ datos.token }}/media/{{ e.mediaId }}" alt="Evidencia fotográfica" loading="lazy">
+                  <figcaption class="pie">
+                    {% if e.nota %}{{ e.nota }} · {% endif %}
+                    {{ e.autor }} · {{ e.fecha }}{% if e.origen == 'celular' %} · 📱{% endif %}
+                  </figcaption>
+                </figure>
+              {% elif e.tipo == 'nota' %}
+                <div class="audio" style="background:var(--surface)">
+                  <div class="t">✎ Nota escrita</div>
+                  <div style="white-space:pre-wrap;font-size:14px;line-height:1.6">{{ e.nota }}</div>
+                  <span class="marca">{{ e.autor }} · {{ e.fecha }}</span>
+                </div>
+              {% else %}
+                <div class="audio">
+                  <div class="t">🎙 Nota de voz
+                    {% if e.duracion %}<span class="tiny">{{ (e.duracion // 60) }}:{{ '%02d' % (e.duracion % 60) }}</span>{% endif %}
+                  </div>
+                  <audio controls preload="none" src="/r/{{ datos.token }}/media/{{ e.mediaId }}"></audio>
+                  <span class="marca">
+                    {% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}
+                  </span>
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% endfor %}
+
+    {% if datos.sueltas %}
+      <div class="sueltas">
+        <h2 style="font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--accent);margin:0 0 12px">
+          Evidencia general</h2>
+        <div class="evid">
+          {% for e in datos.sueltas %}
+            {% if e.tipo == 'foto' %}
+              <figure class="foto" style="margin:0">
+                <img src="/r/{{ datos.token }}/media/{{ e.mediaId }}" alt="Evidencia" loading="lazy">
+                <figcaption class="pie">{% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}</figcaption>
+              </figure>
+            {% elif e.tipo == 'nota' %}
+              <div class="audio" style="background:var(--surface)">
+                <div class="t">✎ Nota escrita</div>
+                <div style="white-space:pre-wrap;font-size:14px;line-height:1.6">{{ e.nota }}</div>
+                <span class="marca">{{ e.autor }} · {{ e.fecha }}</span>
+              </div>
+            {% else %}
+              <div class="audio">
+                <div class="t">🎙 Nota de voz
+                  {% if e.duracion %}<span class="tiny">{{ (e.duracion // 60) }}:{{ '%02d' % (e.duracion % 60) }}</span>{% endif %}</div>
+                <audio controls preload="none" src="/r/{{ datos.token }}/media/{{ e.mediaId }}"></audio>
+                <span class="marca">{% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}</span>
+              </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="fin">
+    Informe generado desde el levantamiento de procesos.
+    Los audios se reproducen en esta página; si la imprimes, se pierden.
+  </div>
+</div>
+{% endif %}
+<script>
+try { const t = localStorage.getItem('lp_tema'); if (t) document.documentElement.setAttribute('data-theme', t); } catch (_) {}
+</script>
+</body>
+</html>

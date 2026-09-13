@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Capturar evidencia</title>
+<meta name="theme-color" content="#112236">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="{{ url_for('static', filename='icono.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='icono-192.png') }}" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icono-180.png') }}">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Procesos">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+<style>
+  body{background:var(--paper)}
+  .cap{max-width:560px;margin:0 auto;padding:16px 14px 120px}
+  .cap header{padding:14px 0 18px}
+  .cap h1{margin:0;font-size:19px;letter-spacing:-.3px}
+  .cap .meta{color:var(--ink-3);font-size:13px;margin-top:3px}
+  .acciones{position:fixed;left:0;right:0;bottom:0;background:var(--surface);
+    border-top:1px solid var(--line);padding:12px 14px calc(12px + env(safe-area-inset-bottom));
+    display:flex;gap:10px;z-index:40;box-shadow:0 -6px 20px rgba(17,34,54,.08)}
+  .acciones .btn{flex:1;justify-content:center;padding:14px;font-size:15px;font-weight:600}
+  .galeria{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px}
+  .galeria img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--line)}
+  .item{position:relative}
+  .item .badge{position:absolute;left:5px;bottom:5px;background:rgba(17,34,54,.82);color:#fff;
+    font-size:10px;padding:2px 6px;border-radius:99px}
+  .audio-item{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line);
+    border-radius:var(--radius-sm);margin-bottom:8px;background:var(--surface)}
+  .audio-item audio{flex:1;height:36px;min-width:0}
+  .grabando{position:fixed;inset:0;background:rgba(13,22,32,.93);z-index:60;display:flex;
+    flex-direction:column;align-items:center;justify-content:center;gap:22px;color:#fff}
+  .grabando .t{font-size:44px;font-weight:700;font-variant-numeric:tabular-nums}
+  .onda{width:120px;height:120px;border-radius:99px;background:var(--bad);display:flex;
+    align-items:center;justify-content:center;font-size:44px;animation:pulso 1.4s infinite}
+  @keyframes pulso{0%,100%{box-shadow:0 0 0 0 rgba(199,80,63,.5)}50%{box-shadow:0 0 0 26px rgba(199,80,63,0)}}
+  .aviso{padding:10px 13px;border-radius:var(--radius-sm);font-size:13px;margin-bottom:14px}
+  .aviso.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+  .aviso.warn{background:color-mix(in srgb,var(--warn) 16%,transparent)}
+  .aviso.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
+</style>
+</head>
+<body>
+<div class="cap" id="cap"><div class="empty"><span class="e">◌</span>Cargando…</div></div>
+<script>window.CAPTURE_TOKEN = "{{ token }}";</script>
+<script src="{{ url_for('static', filename='almacen.js') }}"></script>
+<script src="{{ url_for('static', filename='captura.js') }}"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>

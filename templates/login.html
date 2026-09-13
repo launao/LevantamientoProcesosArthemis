@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingresar — Levantamiento de Procesos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="{{ url_for('static', filename='icono.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='icono-192.png') }}" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icono-180.png') }}">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Procesos">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login" id="frm" autocomplete="on">
+    <div class="flex" style="margin-bottom:18px">
+      <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--brand))"></div>
+      <div><b style="font-size:15px">Levantamiento de Procesos</b></div>
+    </div>
+    <h1>Ingresar</h1>
+    <p class="sub">Usa las credenciales que te dio el administrador.</p>
+    <div class="err" id="err"></div>
+    <label class="f"><span class="lbl">Usuario</span>
+      <input type="text" id="usuario" name="username" autocomplete="username" autocapitalize="none" required></label>
+    <label class="f"><span class="lbl">Contraseña</span>
+      <input type="password" id="password" name="password" autocomplete="current-password" required></label>
+    <button class="btn p" type="submit" id="btn">Entrar</button>
+  </form>
+</div>
+<script>
+const frm = document.getElementById('frm');
+const err = document.getElementById('err');
+const btn = document.getElementById('btn');
+const MENSAJES = {
+  credenciales: 'Usuario o contraseña incorrectos.',
+  demasiados_intentos: 'Demasiados intentos. Espera unos minutos.',
+  error_interno: 'Error del servidor. Revisa los logs del despliegue.'
+};
+frm.addEventListener('submit', async e => {
+  e.preventDefault();
+  err.style.display = 'none';
+  btn.disabled = true; btn.textContent = 'Verificando…';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        usuario: document.getElementById('usuario').value.trim(),
+        password: document.getElementById('password').value
+      })
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) { location.href = '/'; return; }
+    err.textContent = MENSAJES[d.error] || 'No se pudo iniciar sesión.';
+    err.style.display = 'block';
+  } catch (_) {
+    err.textContent = 'Sin conexión con el servidor.';
+    err.style.display = 'block';
+  }
+  btn.disabled = false; btn.textContent = 'Entrar';
+});
+try { const t = localStorage.getItem('lp_tema'); if (t) document.documentElement.setAttribute('data-theme', t); } catch (_) {}
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
