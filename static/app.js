@@ -307,6 +307,7 @@ function render() {
       <nav class="nav">
         ${esClinica() ? `
           ${nav('agenda', '◷', 'Agenda', v)}
+          ${nav('avance', '◱', 'Avance', v)}
           ${nav('procesos', '▤', 'Procesos', v)}
           ${nav('mapa', '⤳', 'Mapa', v)}
         ` : `
@@ -341,9 +342,9 @@ function render() {
   const m = document.getElementById('main');
   const rutas = { tablero: vistaTablero, procesos: vistaProcesos, proceso: vistaProceso,
                   asignacion: vistaAsignacion, equipo: vistaEquipo, agenda: vistaAgenda,
-                  mapa: vistaMapa, plantilla: vistaPlantilla,
+                  mapa: vistaMapa, avance: vistaAvanceClinica, plantilla: vistaPlantilla,
                   ajustes: vistaAjustes, cuenta: vistaAjustes };
-  if (esClinica() && !['agenda', 'procesos', 'proceso', 'mapa'].includes(v)) {
+  if (esClinica() && !['agenda', 'avance', 'procesos', 'proceso', 'mapa'].includes(v)) {
     S.vista = 'agenda'; return render();
   }
   // Las pantallas de configuración son solo del administrador. Se comprueba
@@ -540,7 +541,9 @@ function filaProceso(p) {
   return `<tr data-id="${p.id}" style="cursor:pointer">
     <td class="mut" style="width:74px">${esc(p.codigo || '—')}</td>
     <td><a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
-      <div class="tiny">${esc(p.area || 'Sin área')}${p.contacto ? ' · contacto: ' + esc(p.contacto) : ''}</div></td>
+      ${p.propuestoPor && !p.responsable ? '<span class="etiqueta-prop">propuesto por la clínica</span>' : ''}
+      <div class="tiny">${esc(p.area || 'Sin área')}${p.contacto ? ' · contacto: ' + esc(p.contacto) : ''}</div>
+      ${p.notasClinica ? `<div class="tiny nota-mini">⚑ ${esc(recortar(aTextoPlano(p.notasClinica), 90))}</div>` : ''}</td>
     ${esAdmin() ? `<td class="mut" style="width:130px">${esc(nombrePersona(p.responsable))}</td>` : ''}
     <td style="width:120px">${plazo.html}</td>
     <td style="width:120px"><div class="bar"><i style="width:${av}%"></i></div><span class="tiny">${av}%</span></td>
@@ -709,6 +712,7 @@ function vistaProceso(m) {
       <label class="f" style="margin:0"><span class="lbl">¿Con quién hablar en la clínica?</span>
         <input type="text" id="pContacto" value="${esc(p.contacto || '')}" placeholder="Nombre y cargo de quien conoce el proceso" ${ro ? 'disabled' : ''}></label>
     </div>
+    ${cuadroClinica(p)}
     ${p.enviosTotal ? `<div class="aviso-env tiny" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:color-mix(in srgb,var(--ok) 12%,transparent)">
       ✓ Enviado ${p.enviosTotal} ${p.enviosTotal === 1 ? 'vez' : 'veces'}. Puedes seguir editando y subiendo; al reenviar se actualiza el informe con el mismo enlace.
     </div>` : ''}
@@ -717,6 +721,8 @@ function vistaProceso(m) {
       <span class="tiny" id="avTxt">${av}%</span></div>
   </div>
   <div id="secciones"></div>`;
+
+  conectarCuadroClinica(p);
 
   const bGuardar = document.getElementById('btnGuardar');
   if (bGuardar) bGuardar.onclick = () => guardarAhora(false);
@@ -2279,7 +2285,8 @@ function vistaAgenda(m) {
 
   m.innerHTML = `
   <div class="topbar"><h1>Agenda de levantamiento</h1><div class="sp"></div>
-    <span class="tiny">${ps.length} proceso(s) pendientes</span></div>
+    <span class="tiny">${ps.length} pendiente(s)</span>
+    <button class="btn p" id="proponerAg">+ Proponer un proceso</button></div>
 
   <div class="banner">
     Aquí está lo que el equipo va a venir a preguntar. Para cada proceso, escriba
@@ -2299,6 +2306,26 @@ function vistaAgenda(m) {
       </div>
     </section>`).join('') ||
     '<div class="empty"><span class="e">◷</span>No hay procesos programados por ahora.</div>'}`;
+
+  const bp = document.getElementById('proponerAg');
+  if (bp) bp.onclick = modalProponer;
+
+  m.querySelectorAll('[data-nota]').forEach(inp => {
+    let t = null;
+    inp.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        try {
+          await api('/procesos/' + inp.dataset.nota + '/nota-clinica',
+                    { method: 'PUT', body: { notasClinica: inp.value } });
+          const p = S.procesos.find(x => x.id === inp.dataset.nota);
+          if (p) p.notasClinica = inp.value;
+          const eco = m.querySelector(`[data-econota="${inp.dataset.nota}"]`);
+          if (eco) { eco.textContent = 'Guardado'; setTimeout(() => { eco.textContent = ''; }, 2000); }
+        } catch (_) { toast('No se pudo guardar'); }
+      }, 700);
+    };
+  });
 
   m.querySelectorAll('[data-atiende]').forEach(inp => {
     let t = null;
@@ -2335,11 +2362,19 @@ function tarjetaAgenda(p) {
       ${p.contacto ? `<br>Referencia dada: ${esc(p.contacto)}` : ''}
     </div>
 
-    <label class="f" style="margin:0">
+    <label class="f" style="margin:0 0 10px">
       <span class="lbl">¿Quién atiende de la clínica?</span>
       <input type="text" data-atiende="${p.id}" value="${esc(p.atiende || '')}"
         placeholder="Nombre y cargo de quien va a responder">
       <span class="tiny" data-eco="${p.id}"></span>
+    </label>
+
+    <label class="f" style="margin:0">
+      <span class="lbl">Tener en cuenta</span>
+      <span class="hint">Lo que quien entrevista debería saber antes de llegar.</span>
+      <textarea data-nota="${p.id}" style="min-height:60px;font-size:13px"
+        placeholder="Ej: solo está los martes; el proceso cambió en junio">${esc(p.notasClinica || '')}</textarea>
+      <span class="tiny" data-econota="${p.id}"></span>
     </label>
 
     ${listo ? `<div style="margin-top:10px"><a class="btn sm" href="#/proceso/${p.id}">Ver lo levantado</a></div>` : ''}
@@ -2693,4 +2728,164 @@ function bajarTexto(nombre, texto, tipo) {
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   toast('Descargado: ' + nombre);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Cuadro “tener en cuenta”
+
+   Lo escribe la clínica antes de la entrevista y lo lee quien levanta.
+   Va arriba del todo a propósito: advertencias tipo “doña Marta solo
+   está los martes” o “este proceso cambió en junio” sirven antes de
+   la visita, no después.
+   ═══════════════════════════════════════════════════════════════ */
+function cuadroClinica(p) {
+  const puede = esAdmin() || esClinica();
+  const texto = p.notasClinica || '';
+  if (!puede && !texto) return '';
+
+  return `<div class="cuadro-clinica ${texto ? '' : 'vacio'}">
+    <div class="cc-cab">
+      <span class="cc-et">Tener en cuenta</span>
+      <span class="tiny">${puede ? 'Lo escribe la clínica para quien va a entrevistar'
+                                 : 'Nota de la clínica'}</span>
+      <span class="tiny right" id="ccEstado"></span>
+    </div>
+    ${puede
+      ? `<textarea id="ccTexto" placeholder="Ej: La persona que conoce esto es doña Marta, y solo está los martes y jueves por la mañana. El proceso cambió en junio cuando entró el kiosco.">${esc(texto)}</textarea>`
+      : `<div class="cc-lectura">${texto}</div>`}
+  </div>`;
+}
+
+function conectarCuadroClinica(p) {
+  const el = document.getElementById('ccTexto');
+  if (!el) return;
+  let t = null;
+  el.oninput = () => {
+    const eco = document.getElementById('ccEstado');
+    if (eco) eco.textContent = 'Sin guardar…';
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      try {
+        await api('/procesos/' + p.id + '/nota-clinica',
+                  { method: 'PUT', body: { notasClinica: el.value } });
+        p.notasClinica = el.value;
+        const enLista = S.procesos.find(x => x.id === p.id);
+        if (enLista) enLista.notasClinica = el.value;
+        if (eco) { eco.textContent = 'Guardado'; setTimeout(() => { eco.textContent = ''; }, 2000); }
+      } catch (_) { if (eco) eco.textContent = 'No se pudo guardar'; }
+    }, 700);
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Avance — la vista de la clínica
+
+   No le interesa quién va atrasado sino cuánto falta para terminar y
+   qué ya puede leer.
+   ═══════════════════════════════════════════════════════════════ */
+function vistaAvanceClinica(m) {
+  const ps = S.procesos;
+  const enviados = ps.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado');
+  const av = avanceGlobal();
+  const areas = [...new Set(ps.map(p => p.area || 'Sin área'))];
+  const sinAtender = ps.filter(p => !p.atiende && p.estado !== 'aprobado');
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Avance del levantamiento</h1><div class="sp"></div>
+    <button class="btn p" id="proponer">+ Proponer un proceso</button></div>
+
+  <div class="grid g4" style="margin-bottom:16px">
+    <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos identificados</div></div>
+    <div class="kpi"><div class="n">${av}%</div><div class="t">Avance general</div>
+      <div class="bar" style="margin-top:8px"><i style="width:${av}%"></i></div></div>
+    <div class="kpi"><div class="n">${enviados.length}</div><div class="t">Listos para leer</div></div>
+    <div class="kpi"><div class="n">${sinAtender.length}</div><div class="t">Sin asignar de su lado</div></div>
+  </div>
+
+  ${sinAtender.length ? `<div class="banner" style="margin-bottom:16px">
+    Hay ${sinAtender.length} proceso(s) donde todavía no han dicho quién de la clínica responde.
+    Se asignan desde <b>Agenda</b>.</div>` : ''}
+
+  <div class="grid g2" style="margin-bottom:16px">
+    <div class="card"><h3>Cómo va cada área</h3>
+      ${areas.map(a => {
+        const sub = ps.filter(p => (p.area || 'Sin área') === a);
+        const x = Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length);
+        const list = sub.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
+        return `<div style="margin-bottom:12px">
+          <div class="flex" style="font-size:13px;margin-bottom:4px">
+            <span>${esc(a)}</span>
+            <span class="right mut">${list} de ${sub.length} terminados · ${x}%</span></div>
+          <div class="bar"><i style="width:${x}%"></i></div></div>`;
+      }).join('') || '<div class="mut">Todavía no hay procesos.</div>'}
+    </div>
+
+    <div class="card"><h3>En qué punto está cada uno</h3>
+      ${ESTADOS.map(e => {
+        const n = ps.filter(p => (p.estado || 'pendiente') === e.k).length;
+        const pc = ps.length ? Math.round(n / ps.length * 100) : 0;
+        return `<div style="margin-bottom:11px"><div class="flex" style="font-size:13px;margin-bottom:4px">
+          <span>${esc(e.n)}</span><span class="right mut">${n}</span></div>
+          <div class="bar"><i style="width:${pc}%"></i></div></div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <div class="card"><h3>Ya se pueden leer</h3>
+    ${enviados.length ? `<div class="tw"><table class="t"><tbody>
+      ${enviados.map(p => `<tr>
+        <td><a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
+          <div class="tiny">${esc(p.area || '')}${p.atiende ? ' · atendió ' + esc(p.atiende) : ''}</div></td>
+        <td style="width:110px"><span class="pill ${p.estado}">${esc(etiquetaEstado(p.estado))}</span></td>
+        <td style="width:120px"><div class="bar"><i style="width:${avance(p)}%"></i></div></td>
+      </tr>`).join('')}</tbody></table></div>`
+      : '<div class="mut">Todavía ninguno. Aparecen aquí a medida que el equipo los va enviando.</div>'}
+  </div>`;
+
+  document.getElementById('proponer').onclick = modalProponer;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Proponer un proceso
+
+   En toda entrevista aparecen procesos que nadie tenía en la lista.
+   Que la clínica pueda anotarlos en el momento evita que se pierdan.
+   ═══════════════════════════════════════════════════════════════ */
+function modalProponer() {
+  modal(`<h3>Proponer un proceso</h3>
+    <p class="mut" style="margin-top:-6px">
+      ¿Apareció algo que no estaba en la lista? Anótelo aquí. Queda pendiente para que
+      la coordinación decida quién lo levanta y cuándo.
+    </p>
+    <label class="f"><span class="lbl">¿Cómo se llama? <span class="req">*</span></span>
+      <input type="text" id="ppNombre" placeholder="Ej: Entrega de resultados por WhatsApp"></label>
+    <div class="grid g2">
+      <label class="f"><span class="lbl">¿De qué área es?</span>
+        <select id="ppArea">${(S.config.areas || []).map(a => `<option>${esc(a)}</option>`).join('')}</select></label>
+      <label class="f"><span class="lbl">¿Quién sabe de esto?</span>
+        <input type="text" id="ppContacto" placeholder="Nombre y cargo"></label>
+    </div>
+    <label class="f"><span class="lbl">¿Por qué vale la pena levantarlo?</span>
+      <textarea id="ppNota" placeholder="Ej: Salió en la entrevista de admisiones. Nadie lo tiene documentado y se hace todos los días; genera reclamos de pacientes."></textarea></label>
+    <div class="flex"><button class="btn" data-cerrar>Cancelar</button>
+      <button class="btn p right" id="ppOk">Proponer</button></div>`,
+  box => {
+    box.querySelector('#ppOk').onclick = async () => {
+      const nombre = box.querySelector('#ppNombre').value.trim();
+      if (!nombre) { toast('Ponle un nombre'); return; }
+      try {
+        await api('/procesos', { method: 'POST', body: {
+          nombre,
+          area: box.querySelector('#ppArea').value,
+          contacto: box.querySelector('#ppContacto').value.trim(),
+          notasClinica: box.querySelector('#ppNota').value.trim()
+        }});
+        const d = await api('/procesos');
+        S.procesos = d.procesos;
+        cerrarModal(); render();
+        toast('Propuesto. La coordinación lo verá como pendiente de asignar.');
+      } catch (_) { toast('No se pudo proponer'); }
+    };
+    setTimeout(() => box.querySelector('#ppNombre').focus(), 50);
+  });
 }

@@ -31,6 +31,10 @@
   .cab h1{margin:8px 0 6px;font-size:24px;letter-spacing:-.5px;line-height:1.2}
   .cab .meta{color:var(--ink-2);font-size:14px}
   .resumen{display:flex;gap:20px;flex-wrap:wrap;margin-top:18px;font-size:13px;color:var(--ink-2)}
+  .nota-clinica{background:color-mix(in srgb,#E8B931 12%,transparent);
+    border:1px solid color-mix(in srgb,#E8B931 45%,transparent);border-radius:8px;
+    padding:11px 14px;margin-top:16px;font-size:13.5px;line-height:1.6}
+  .nc-et{font-size:11px;letter-spacing:.8px;text-transform:uppercase;font-weight:700;margin-bottom:4px}
   .resumen b{display:block;font-size:19px;color:var(--ink);font-weight:700}
   .cuerpo{padding:0 22px}
   .sx{padding:26px 0 6px}
@@ -95,6 +99,12 @@
       <div><b>{{ datos.totales.audios }}</b>notas de voz</div>
       {% if datos.proceso.enviado %}<div><b>{{ datos.proceso.enviado[:10] }}</b>enviado</div>{% endif %}
     </div>
+    {% if datos.nota_clinica %}
+      <div class="nota-clinica">
+        <div class="nc-et">⚑ Tener en cuenta</div>
+        <div>{{ datos.nota_clinica | safe }}</div>
+      </div>
+    {% endif %}
     {% if datos.ultimo_envio and datos.ultimo_envio.resumen %}
       <div class="banner" style="margin:18px 0 0">{{ datos.ultimo_envio.resumen }}</div>
     {% endif %}

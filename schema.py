@@ -161,6 +161,8 @@ COLUMNAS_NUEVAS = [
     ("procesos", "contacto", "TEXT"),
     ("procesos", "eliminado", "INTEGER DEFAULT 0"),
     ("procesos", "atiende", "TEXT"),
+    ("procesos", "notas_clinica", "TEXT"),
+    ("procesos", "propuesto_por", "TEXT"),
 ]
 
 

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request, send_file, Response
 
 import db as D
-from sanitizar import limpiar_respuestas, a_texto_plano
+from sanitizar import limpiar_respuestas, a_texto_plano, limpiar_html
 from auth import (usuario_actual, iniciar_sesion, cerrar_sesion, login_required,
                   puede_editar, rol_required, hash_password, verify_password,
                   validar_password, login_permitido, registrar_fallo,
@@ -173,6 +173,8 @@ def _procesos(solo_de=None):
             "fechaLimite": str(p.get("fecha_limite") or ""),
             "contacto": p.get("contacto") or "",
             "atiende": p.get("atiende") or "",
+            "notasClinica": p.get("notas_clinica") or "",
+            "propuestoPor": p.get("propuesto_por") or "",
             "enviadoEn": str(p.get("enviado_en") or ""),
             "enviadoPor": p.get("enviado_por") or "",
             "enviosTotal": p.get("envios_total") or 0,
@@ -347,7 +349,7 @@ def _mio(p, u):
 
 
 @api.post("/procesos")
-@puede_editar
+@rol_required("admin", "analista", "clinica")
 def crear_proceso():
     d = request.get_json(silent=True) or {}
     nombre = (d.get("nombre") or "").strip()
@@ -355,9 +357,15 @@ def crear_proceso():
         return jsonify({"error": "nombre_requerido"}), 400
 
     u = usuario_actual()
-    # Solo el administrador decide de quién es un proceso. Cualquier otro
-    # crea a nombre propio, aunque mande otra cosa.
-    responsable = d.get("responsable") or None if u["rol"] == "admin" else u["id"]
+    # Solo el administrador decide de quién es un proceso. Un analista crea a
+    # nombre propio. La clínica propone: el proceso nace sin responsable, para
+    # que la coordinación decida quién lo levanta.
+    if u["rol"] == "admin":
+        responsable = d.get("responsable") or None
+    elif u["rol"] == "clinica":
+        responsable = None
+    else:
+        responsable = u["id"]
 
     pid = _nuevo_id("p_")
     D.execute(
@@ -371,6 +379,10 @@ def crear_proceso():
          u["id"], u["id"],
          (d.get("fechaLimite") or None) if u["rol"] == "admin" else None,
          (d.get("contacto") or "").strip()))
+
+    if u["rol"] == "clinica":
+        D.execute("UPDATE procesos SET propuesto_por=?, notas_clinica=? WHERE id=?",
+                  (u["id"], (d.get("notasClinica") or "").strip()[:4000], pid))
     auditar("proceso_creado", "proceso", pid, nombre)
     return jsonify({"ok": True, "id": pid})
 
@@ -389,6 +401,24 @@ def designar_atiende(pid):
     D.execute("UPDATE procesos SET atiende=? WHERE id=?",
               ((d.get("atiende") or "").strip()[:200], pid))
     auditar("atiende_designado", "proceso", pid, d.get("atiende"))
+    return jsonify({"ok": True})
+
+
+@api.put("/procesos/<pid>/nota-clinica")
+@login_required
+def nota_clinica(pid):
+    """El cuadro de “tener en cuenta”: lo escribe la clínica, lo lee quien
+    levanta. Es el canal para advertir cosas antes de la entrevista."""
+    u = usuario_actual()
+    if u["rol"] not in ("admin", "clinica"):
+        return jsonify({"error": "sin_permiso"}), 403
+    if not D.row("SELECT id FROM procesos WHERE id=?", (pid,)):
+        return jsonify({"error": "no_existe"}), 404
+
+    d = request.get_json(silent=True) or {}
+    texto = limpiar_html((d.get("notasClinica") or "").strip()[:8000])
+    D.execute("UPDATE procesos SET notas_clinica=? WHERE id=?", (texto, pid))
+    auditar("nota_clinica", "proceso", pid)
     return jsonify({"ok": True})
 
 
@@ -1051,7 +1081,9 @@ def datos_informe(token):
             "nombre": p["nombre"], "codigo": p["codigo"], "area": p["area"],
             "estado": p["estado"], "responsable": nombres.get(p["responsable_id"], "—"),
             "enviado": str(p.get("enviado_en") or "")[:16],
+            "atiende": p.get("atiende") or "",
         },
+        "nota_clinica": p.get("notas_clinica") or "",
         "avance": avance,
         "secciones": secciones,
         "sueltas": sueltas,
