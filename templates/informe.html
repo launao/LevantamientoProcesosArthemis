@@ -50,7 +50,11 @@
   .pasos tr.det td{padding-top:0;border-bottom:1px solid var(--line)}
   .det-txt{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-size:13px;
            line-height:1.6;color:var(--ink-2);white-space:pre-wrap;margin-bottom:6px}
-  .det-subs{margin:0;padding-left:20px;font-size:13px;color:var(--ink-2);line-height:1.7}
+  .det-subs{margin:0;padding-left:22px;font-size:13px;color:var(--ink-2);line-height:1.7}
+  .det-subs .sub-det{font-size:12.5px;color:var(--ink-3);margin:2px 0 6px;line-height:1.55}
+  .paso-evid{border-left:3px solid var(--line-2);padding-left:12px;margin-bottom:12px}
+  .paso-ref{font-size:11px;letter-spacing:.7px;text-transform:uppercase;color:var(--accent);
+            font-weight:700;margin-bottom:6px}
   .evid{margin-top:14px;display:flex;flex-direction:column;gap:12px}
   .foto{border-radius:10px;overflow:hidden;border:1px solid var(--line)}
   .foto img{display:block;width:100%}
@@ -114,9 +118,15 @@
                 {% if r.detalle or r.subtareas %}
                 <tr class="det"><td></td><td colspan="4">
                   {% if r.detalle %}<div class="det-txt">{{ r.detalle | safe }}</div>{% endif %}
-                  {% if r.subtareas %}<ul class="det-subs">
-                    {% for t in r.subtareas %}{% if t %}<li>{{ t }}</li>{% endif %}{% endfor %}
-                  </ul>{% endif %}
+                  {% if r.subtareas %}<ol class="det-subs">
+                    {% for t in r.subtareas %}
+                      {% if t is mapping %}
+                        {% if t.texto %}<li>{{ t.texto }}
+                          {% if t.detalle %}<div class="sub-det">{{ t.detalle | safe }}</div>{% endif %}
+                        </li>{% endif %}
+                      {% elif t %}<li>{{ t }}</li>{% endif %}
+                    {% endfor %}
+                  </ol>{% endif %}
                 </td></tr>
                 {% endif %}
               {% endif %}{% endfor %}
@@ -132,6 +142,34 @@
             <div class="txt">{{ c.valor | safe }}</div>
           {% else %}
             <div class="txt mut"><i>Sin respuesta escrita — ver evidencia abajo.</i></div>
+          {% endif %}
+
+          {% if c.porPaso %}
+          <div class="evid">
+            {% for clave, lista in c.porPaso.items() %}
+              <div class="paso-evid">
+                <div class="paso-ref">
+                  {% set partes = clave.split(':') %}
+                  {% if partes|length > 2 %}Sub-actividad {{ partes[1]|int + 1 }}.{{ partes[2]|int + 1 }}
+                  {% else %}Actividad {{ partes[1]|int + 1 }}{% endif %}
+                </div>
+                {% for e in lista %}
+                  {% if e.tipo == 'foto' %}
+                    <figure class="foto" style="margin:0 0 8px"><img src="/r/{{ datos.token }}/media/{{ e.mediaId }}" loading="lazy">
+                      <figcaption class="pie">{% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}</figcaption></figure>
+                  {% elif e.tipo == 'nota' %}
+                    <div class="audio" style="background:var(--surface);margin-bottom:8px">
+                      <div class="t">✎ Nota escrita</div>
+                      <div style="white-space:pre-wrap;font-size:14px">{{ e.nota }}</div></div>
+                  {% else %}
+                    <div class="audio" style="margin-bottom:8px"><div class="t">🎙 Nota de voz
+                      {% if e.duracion %}<span class="tiny">{{ (e.duracion // 60) }}:{{ '%02d' % (e.duracion % 60) }}</span>{% endif %}</div>
+                      <audio controls preload="none" src="/r/{{ datos.token }}/media/{{ e.mediaId }}"></audio></div>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            {% endfor %}
+          </div>
           {% endif %}
 
           {% if c.evidencias %}

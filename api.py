@@ -117,6 +117,12 @@ def cambiar_password():
 # Carga inicial
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _alcance():
+    """None significa 'todos los procesos'; un id, solo los de esa persona."""
+    u = usuario_actual()
+    return None if u["rol"] == "admin" else u["id"]
+
+
 @api.get("/bootstrap")
 @login_required
 def bootstrap():
@@ -125,7 +131,7 @@ def bootstrap():
         "config": D.jload(D.row("SELECT data FROM config WHERE id=1")["data"], {}),
         "plantilla": D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {}),
         "equipo": _equipo(),
-        "procesos": _procesos(),
+        "procesos": _procesos(_alcance()),
     })
 
 
@@ -135,8 +141,14 @@ def _equipo():
         "WHERE activo ORDER BY nombre")
 
 
-def _procesos():
-    ps = D.rows("SELECT * FROM procesos ORDER BY codigo, nombre")
+def _procesos(solo_de=None):
+    """El admin ve todo. Los demás, únicamente lo que tienen a cargo."""
+    if solo_de:
+        ps = D.rows("SELECT * FROM procesos WHERE responsable_id=? AND COALESCE(eliminado,0)=0 "
+                    "ORDER BY codigo, nombre", (solo_de,))
+    else:
+        ps = D.rows("SELECT * FROM procesos WHERE COALESCE(eliminado,0)=0 "
+                    "ORDER BY codigo, nombre")
     evs = D.rows("SELECT * FROM evidencias ORDER BY creado")
     por_proc = {}
     for e in evs:
@@ -153,6 +165,8 @@ def _procesos():
             "area": p["area"], "responsable": p["responsable_id"],
             "estado": p["estado"], "prioridad": p["prioridad"], "notas": p["notas"],
             "respuestas": D.jload(p["respuestas"], {}),
+            "fechaLimite": str(p.get("fecha_limite") or ""),
+            "contacto": p.get("contacto") or "",
             "enviadoEn": str(p.get("enviado_en") or ""),
             "enviadoPor": p.get("enviado_por") or "",
             "enviosTotal": p.get("envios_total") or 0,
@@ -165,7 +179,7 @@ def _procesos():
 @api.get("/procesos")
 @login_required
 def listar_procesos():
-    return jsonify({"procesos": _procesos()})
+    return jsonify({"procesos": _procesos(_alcance())})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -336,12 +350,15 @@ def crear_proceso():
     pid = _nuevo_id("p_")
     D.execute(
         "INSERT INTO procesos (id, codigo, nombre, area, responsable_id, estado, "
-        "notas, respuestas, creado_por, actualizado_por) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "notas, respuestas, creado_por, actualizado_por, fecha_limite, contacto) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (pid, (d.get("codigo") or "").strip(), nombre, (d.get("area") or "").strip(),
          responsable, d.get("estado") or "pendiente",
          (d.get("notas") or "").strip(),
          D.jdump(limpiar_respuestas(d.get("respuestas") or {})),
-         u["id"], u["id"]))
+         u["id"], u["id"],
+         (d.get("fechaLimite") or None) if u["rol"] == "admin" else None,
+         (d.get("contacto") or "").strip()))
     auditar("proceso_creado", "proceso", pid, nombre)
     return jsonify({"ok": True, "id": pid})
 
@@ -358,19 +375,31 @@ def actualizar_proceso(pid):
     if not _mio(p, u):
         return jsonify({"error": "no_es_tuyo"}), 403
     mapa = {"codigo": "codigo", "nombre": "nombre", "area": "area",
-            "estado": "estado", "prioridad": "prioridad", "notas": "notas"}
+            "estado": "estado", "prioridad": "prioridad", "notas": "notas",
+            "contacto": "contacto"}
+    # La fecha de entrega la fija quien reparte el trabajo.
+    if "fechaLimite" in d and u["rol"] == "admin":
+        mapa_extra = True
+        campos_fecha = d.get("fechaLimite") or None
+    else:
+        campos_fecha = None
     campos, params = [], []
     for k, col in mapa.items():
         if k in d:
             campos.append(f"{col}=?")
             params.append(d[k])
-    # Reasignar es potestad del administrador; a los demás se les ignora.
+    # Reasignar y poner fecha de entrega son potestad del administrador.
     if "responsable" in d and u["rol"] == "admin":
         campos.append("responsable_id=?")
         params.append(d["responsable"] or None)
+    if "fechaLimite" in d and u["rol"] == "admin":
+        campos.append("fecha_limite=?")
+        params.append(campos_fecha)
     if "respuestas" in d:
+        nuevas = limpiar_respuestas(d["respuestas"] or {})
+        _guardar_version(pid, u["id"], "edición")
         campos.append("respuestas=?")
-        params.append(D.jdump(limpiar_respuestas(d["respuestas"] or {})))
+        params.append(D.jdump(nuevas))
 
     campos.append("actualizado_por=?")
     params.append(u["id"])
@@ -384,17 +413,94 @@ def actualizar_proceso(pid):
 @api.delete("/procesos/<pid>")
 @puede_editar
 def borrar_proceso(pid):
+    """No borra: archiva. Nada de lo que alguien trabajó se destruye por un
+    clic mal dado; el administrador siempre lo puede recuperar."""
     p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
     if not p:
         return jsonify({"error": "no_existe"}), 404
-    if not _mio(p, usuario_actual()):
+    u = usuario_actual()
+    if not _mio(p, u):
         return jsonify({"error": "no_es_tuyo"}), 403
-    medias = D.rows("SELECT media_id FROM evidencias WHERE proceso_id=?", (pid,))
-    for m in medias:
-        _borrar_media(m["media_id"])
-    D.execute("DELETE FROM evidencias WHERE proceso_id=?", (pid,))
-    D.execute("DELETE FROM procesos WHERE id=?", (pid,))
-    auditar("proceso_eliminado", "proceso", pid)
+
+    _guardar_version(pid, u["id"], "antes de archivar")
+    D.execute("UPDATE procesos SET eliminado=1 WHERE id=?", (pid,))
+    auditar("proceso_archivado", "proceso", pid)
+    return jsonify({"ok": True, "archivado": True})
+
+
+@api.get("/papelera")
+@rol_required("admin")
+def papelera():
+    ps = D.rows("SELECT id, codigo, nombre, area, responsable_id, actualizado "
+                "FROM procesos WHERE COALESCE(eliminado,0)=1 ORDER BY actualizado DESC")
+    return jsonify({"procesos": [
+        {"id": p["id"], "codigo": p["codigo"], "nombre": p["nombre"], "area": p["area"],
+         "responsable": p["responsable_id"], "actualizado": str(p["actualizado"])}
+        for p in ps]})
+
+
+@api.post("/procesos/<pid>/restaurar")
+@rol_required("admin")
+def restaurar_proceso(pid):
+    D.execute("UPDATE procesos SET eliminado=0 WHERE id=?", (pid,))
+    auditar("proceso_restaurado", "proceso", pid)
+    return jsonify({"ok": True})
+
+
+def _guardar_version(pid, uid, motivo):
+    """Guarda cómo estaba el proceso ANTES de este cambio.
+
+    Se conservan las últimas 40 versiones de cada proceso. Suficiente para
+    deshacer un borrado accidental sin llenar la base de historia inútil.
+    """
+    actual = D.row("SELECT respuestas, nombre FROM procesos WHERE id=?", (pid,))
+    if not actual:
+        return
+    ultima = D.row("SELECT respuestas FROM versiones WHERE proceso_id=? "
+                   "ORDER BY creado DESC LIMIT 1", (pid,))
+    if ultima and ultima["respuestas"] == actual["respuestas"]:
+        return                      # nada cambió: no se guarda otra copia igual
+
+    D.execute("INSERT INTO versiones (id, proceso_id, respuestas, nombre, usuario_id, motivo, creado) "
+              "VALUES (?,?,?,?,?,?,?)",
+              (_nuevo_id("v_"), pid, actual["respuestas"], actual["nombre"], uid, motivo,
+               datetime.utcnow().isoformat(timespec="microseconds")))
+
+    viejas = D.rows("SELECT id FROM versiones WHERE proceso_id=? ORDER BY creado DESC", (pid,))
+    for v in viejas[40:]:
+        D.execute("DELETE FROM versiones WHERE id=?", (v["id"],))
+
+
+@api.get("/procesos/<pid>/versiones")
+@puede_editar
+def listar_versiones(pid):
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p or not _mio(p, usuario_actual()):
+        return jsonify({"error": "no_es_tuyo"}), 403
+    nombres = {u["id"]: u["nombre"] for u in D.rows("SELECT id, nombre FROM usuarios")}
+    vs = D.rows("SELECT id, nombre, usuario_id, motivo, creado FROM versiones "
+                "WHERE proceso_id=? ORDER BY creado DESC", (pid,))
+    return jsonify({"versiones": [
+        {"id": v["id"], "nombre": v["nombre"], "motivo": v["motivo"],
+         "por": nombres.get(v["usuario_id"], ""), "creado": str(v["creado"])}
+        for v in vs]})
+
+
+@api.post("/procesos/<pid>/versiones/<vid>/restaurar")
+@puede_editar
+def restaurar_version(pid, vid):
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p or not _mio(p, usuario_actual()):
+        return jsonify({"error": "no_es_tuyo"}), 403
+    v = D.row("SELECT respuestas FROM versiones WHERE id=? AND proceso_id=?", (vid, pid))
+    if not v:
+        return jsonify({"error": "no_existe"}), 404
+
+    u = usuario_actual()
+    _guardar_version(pid, u["id"], "antes de restaurar")
+    D.execute(f"UPDATE procesos SET respuestas=?, actualizado={D.NOW} WHERE id=?",
+              (v["respuestas"], pid))
+    auditar("version_restaurada", "proceso", pid, vid)
     return jsonify({"ok": True})
 
 
@@ -829,17 +935,28 @@ def datos_informe(token):
             "autor": nombres.get(e["autor_id"], ""), "fecha": str(e["creado"])[:16],
         })
 
+    # Evidencia pegada a una actividad o a una sub-actividad: su campo viene
+    # como "f_pasos:2" o "f_pasos:2:1". Se agrupa aparte para mostrarla junto
+    # al paso al que pertenece.
+    por_paso = {}
+    for clave, lista in por_campo.items():
+        if ":" in clave:
+            base = clave.split(":")[0]
+            por_paso.setdefault(base, {})[clave] = lista
+
     secciones = []
     for s in plantilla.get("secciones", []):
         campos = []
         for c in s.get("campos", []):
             v = respuestas.get(c["id"])
             ev = por_campo.get(c["id"], [])
-            if not ev and (v is None or v == "" or v == [] or v == {}):
+            extra = por_paso.get(c["id"], {})
+            if not ev and not extra and (v is None or v == "" or v == [] or v == {}):
                 continue
             campos.append({
                 "etiqueta": c["etiqueta"], "tipo": c["tipo"],
                 "valor": v, "nombres": nombres, "evidencias": ev,
+                "porPaso": por_paso.get(c["id"], {}),
             })
         if campos:
             secciones.append({"nombre": s.get("nombre", ""), "campos": campos})
@@ -918,7 +1035,18 @@ def _valor_texto(campo, v, nombres):
                      f"{r.get('sistema','')} | {r.get('tiempo','')}")
             if r.get("detalle"):
                 linea += " || Detalle: " + a_texto_plano(r["detalle"])
-            subs = [x for x in (r.get("subtareas") or []) if x]
+            subs = []
+            for x in (r.get("subtareas") or []):
+                if isinstance(x, dict):
+                    txt = x.get("texto") or ""
+                    if x.get("detalle"):
+                        txt += f" ({a_texto_plano(x['detalle'])})"
+                elif x:
+                    txt = str(x)
+                else:
+                    continue
+                if txt.strip():
+                    subs.append(txt)
             if subs:
                 linea += " || Sub: " + "; ".join(subs)
             partes.append(linea)

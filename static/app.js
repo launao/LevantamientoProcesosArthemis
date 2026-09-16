@@ -181,6 +181,7 @@ async function guardarAhora(automatico) {
     await api('/procesos/' + p.id, { method: 'PUT', body: {
       nombre: p.nombre, codigo: p.codigo, area: p.area,
       responsable: p.responsable || null, estado: p.estado,
+      fechaLimite: p.fechaLimite || null, contacto: p.contacto || '',
       notas: p.notas || '', respuestas: p.respuestas
     }});
     const i = S.procesos.findIndex(x => x.id === p.id);
@@ -263,12 +264,13 @@ function render() {
       <div class="brand"><div class="dot"></div>
         <div><b>${esc(S.config.proyecto || 'Levantamiento')}</b><small>${esc(S.config.organizacion || 'Procesos')}</small></div></div>
       <nav class="nav">
-        ${nav('tablero', '◱', 'Tablero', v)}
+        ${nav('tablero', '◱', esAdmin() ? 'Tablero' : 'Mi avance', v)}
         ${nav('procesos', '▤', 'Procesos', v)}
-        ${nav('asignacion', '⇄', 'Asignación', v)}
-        ${nav('equipo', '👥', 'Equipo', v)}
+        ${esAdmin() ? nav('asignacion', '⇄', 'Asignación', v) : ''}
+        ${esAdmin() ? nav('equipo', '👥', 'Equipo', v) : ''}
         ${esAdmin() ? nav('plantilla', '⚙', 'Plantilla', v) : ''}
-        ${nav('ajustes', '⋯', 'Ajustes', v)}
+        ${esAdmin() ? nav('ajustes', '⋯', 'Ajustes', v) : ''}
+        ${esAdmin() ? '' : nav('cuenta', '⋯', 'Mi cuenta', v)}
       </nav>
       <div class="side-foot">
         <div style="font-weight:600;color:var(--ink-2)">${esc(S.yo.nombre)}</div>
@@ -288,9 +290,14 @@ function render() {
   };
 
   const m = document.getElementById('main');
-  ({ tablero: vistaTablero, procesos: vistaProcesos, proceso: vistaProceso,
-     asignacion: vistaAsignacion, equipo: vistaEquipo,
-     plantilla: vistaPlantilla, ajustes: vistaAjustes }[v] || vistaTablero)(m);
+  const rutas = { tablero: vistaTablero, procesos: vistaProcesos, proceso: vistaProceso,
+                  asignacion: vistaAsignacion, equipo: vistaEquipo,
+                  plantilla: vistaPlantilla, ajustes: vistaAjustes, cuenta: vistaAjustes };
+  // Las pantallas de configuración son solo del administrador. Se comprueba
+  // aquí además de ocultar el menú, por si alguien llega por otra vía.
+  const soloAdmin = ['asignacion', 'equipo', 'plantilla'];
+  if (soloAdmin.includes(v) && !esAdmin()) { S.vista = 'tablero'; return render(); }
+  (rutas[v] || vistaTablero)(m);
 }
 function nav(k, ic, lb, v) {
   const on = v === k || (k === 'procesos' && v === 'proceso');
@@ -299,97 +306,232 @@ function nav(k, ic, lb, v) {
 
 /* ── Tablero ──────────────────────────────────────────────────── */
 function vistaTablero(m) {
+  return esAdmin() ? tableroAdmin(m) : tableroPersonal(m);
+}
+
+/** Lo que ve quien levanta: solo su trabajo, sin ruido del resto. */
+function tableroPersonal(m) {
   const ps = S.procesos;
-  const porEstado = k => ps.filter(p => p.estado === k).length;
+  const porEstado = k => ps.filter(p => (p.estado || 'pendiente') === k).length;
+  const av = avanceGlobal();
+  const urgentes = ps.map(p => ({ p, plazo: textoPlazo(p.fechaLimite) }))
+    .filter(x => x.plazo.dias !== null && x.plazo.dias <= 3 && x.p.estado !== 'aprobado')
+    .sort((a, b) => a.plazo.dias - b.plazo.dias);
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Hola, ${esc((S.yo.nombre || '').split(' ')[0])}</h1><div class="sp"></div>
+    ${puedeEditar() ? '<button class="btn p" id="nuevoTab">+ Nuevo proceso</button>' : ''}</div>
+
+  ${urgentes.length ? `<div class="banner" style="margin-bottom:16px">
+    <b>Para pronto:</b> ${urgentes.map(x => `${esc(x.p.nombre)} (${x.plazo.dias < 0 ? 'vencido' : x.plazo.dias === 0 ? 'hoy' : 'en ' + x.plazo.dias + ' días'})`).join(' · ')}
+  </div>` : ''}
+
+  <div class="grid g4" style="margin-bottom:16px">
+    <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos a mi cargo</div></div>
+    <div class="kpi"><div class="n">${av}%</div><div class="t">Mi avance promedio</div>
+      <div class="bar" style="margin-top:8px"><i style="width:${av}%"></i></div></div>
+    <div class="kpi"><div class="n">${porEstado('en_revision') + porEstado('aprobado')}</div><div class="t">Ya enviados</div></div>
+    <div class="kpi"><div class="n">${porEstado('pendiente') + porEstado('en_curso')}</div><div class="t">Me faltan</div></div>
+  </div>
+
+  <div class="card"><h3>Mis procesos</h3>
+    ${ps.length ? `<div class="tw"><table class="t"><tbody>
+      ${[...ps].sort((a, b) => avance(a) - avance(b)).map(p => filaProceso(p)).join('')}
+    </tbody></table></div>` : `<div class="empty"><span class="e">▤</span>
+      Todavía no tienes procesos asignados. Puedes crear el tuyo con el botón de arriba.</div>`}
+  </div>`;
+
+  const b = document.getElementById('nuevoTab');
+  if (b) b.onclick = modalNuevoProceso;
+  m.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => abrirProceso(tr.dataset.id));
+}
+
+/** Lo que ve el administrador: el total y el detalle de cada persona. */
+function tableroAdmin(m) {
+  const ps = S.procesos;
+  const porEstado = k => ps.filter(p => (p.estado || 'pendiente') === k).length;
   const fotos = ps.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'foto').length, 0);
   const audios = ps.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'audio').length, 0);
   const av = avanceGlobal();
+  const vencidos = ps.filter(p => {
+    const pl = textoPlazo(p.fechaLimite);
+    return pl.dias !== null && pl.dias < 0 && p.estado !== 'aprobado';
+  });
 
   m.innerHTML = `
   <div class="topbar"><h1>Tablero</h1><div class="sp"></div>
-    ${puedeEditar() ? '<button class="btn p" id="nuevoTab">+ Nuevo proceso</button>' : ''}</div>
+    <button class="btn p" id="nuevoTab">+ Nuevo proceso</button></div>
+
+  ${vencidos.length ? `<div class="banner" style="margin-bottom:16px">
+    <b>${vencidos.length} proceso(s) pasados de fecha:</b>
+    ${vencidos.slice(0, 5).map(p => `${esc(p.nombre)} — ${esc(nombrePersona(p.responsable))}`).join(' · ')}
+  </div>` : ''}
 
   <div class="grid g4" style="margin-bottom:16px">
-    <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos registrados</div></div>
+    <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos en total</div></div>
     <div class="kpi"><div class="n">${av}%</div><div class="t">Avance promedio</div>
       <div class="bar" style="margin-top:8px"><i style="width:${av}%"></i></div></div>
-    <div class="kpi"><div class="n">${porEstado('aprobado')}</div><div class="t">Aprobados</div></div>
+    <div class="kpi"><div class="n">${porEstado('en_revision') + porEstado('aprobado')}</div><div class="t">Enviados</div></div>
     <div class="kpi"><div class="n">${fotos} / ${audios}</div><div class="t">Fotos / notas de voz</div></div>
   </div>
 
-  <div class="grid g2" style="margin-bottom:16px">
-    <div class="card"><h3>Estado del levantamiento</h3>
+  <div class="card" style="margin-bottom:16px"><h3>Cada persona</h3>
+    <div class="grid g2">
+      ${S.equipo.filter(u => u.rol !== 'lector').map(pe => {
+        const sub = ps.filter(p => p.responsable === pe.id);
+        const x = sub.length ? Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length) : 0;
+        const env = sub.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
+        const tarde = sub.filter(p => { const pl = textoPlazo(p.fechaLimite); return pl.dias !== null && pl.dias < 0 && p.estado !== 'aprobado'; }).length;
+        return `<div class="persona-card" data-persona="${pe.id}">
+          <div class="flex" style="margin-bottom:8px">
+            <div class="avatar">${esc((pe.nombre || '?').trim()[0].toUpperCase())}</div>
+            <div style="flex:1"><b>${esc(pe.nombre)}</b>
+              <div class="tiny">${sub.length} asignado(s) · ${env} enviado(s)${tarde ? ` · <span class="plazo vencido">${tarde} en mora</span>` : ''}</div></div>
+            <div style="text-align:right"><b style="font-size:18px">${x}%</b></div>
+          </div>
+          <div class="bar"><i style="width:${x}%"></i></div>
+          ${sub.length ? `<div class="tiny" style="margin-top:8px">${sub.slice(0, 4).map(p =>
+              `<span class="chip" style="margin:2px 3px 0 0;font-size:11px">${esc(p.nombre)}</span>`).join('')}${
+              sub.length > 4 ? ` +${sub.length - 4}` : ''}</div>` : ''}
+        </div>`;
+      }).join('') || '<div class="mut">Agrega personas en Equipo.</div>'}
+    </div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card"><h3>Por estado</h3>
       ${ESTADOS.map(e => {
         const n = porEstado(e.k), pc = ps.length ? Math.round(n / ps.length * 100) : 0;
         return `<div style="margin-bottom:11px"><div class="flex" style="font-size:13px;margin-bottom:4px">
-          <span>${e.n}</span><span class="right mut">${n}</span></div>
+          <span>${esc(e.n)}</span><span class="right mut">${n}</span></div>
           <div class="bar"><i style="width:${pc}%"></i></div></div>`;
       }).join('')}
     </div>
-    <div class="card"><h3>Avance por área</h3>
+    <div class="card"><h3>Por área</h3>
       ${(S.config.areas || []).map(a => {
         const sub = ps.filter(p => p.area === a); if (!sub.length) return '';
         const x = Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length);
         return `<div style="margin-bottom:10px"><div class="flex" style="font-size:13px;margin-bottom:4px">
           <span>${esc(a)}</span><span class="right mut">${sub.length} · ${x}%</span></div>
           <div class="bar"><i style="width:${x}%"></i></div></div>`;
-      }).join('') || '<div class="mut">Aún no hay procesos asignados a un área.</div>'}
+      }).join('') || '<div class="mut">Aún no hay procesos por área.</div>'}
     </div>
-  </div>
-
-  <div class="card"><h3>Carga por responsable</h3>
-    <div class="tw"><table class="t">
-      <thead><tr><th>Persona</th><th>Rol</th><th>Asignados</th><th>Aprobados</th><th style="width:170px">Avance</th></tr></thead>
-      <tbody>${S.equipo.map(pe => {
-        const sub = ps.filter(p => p.responsable === pe.id);
-        const x = sub.length ? Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length) : 0;
-        return `<tr><td><b>${esc(pe.nombre)}</b></td><td class="mut">${esc(pe.rol)}</td>
-          <td>${sub.length}</td><td>${sub.filter(p => p.estado === 'aprobado').length}</td>
-          <td><div class="bar"><i style="width:${x}%"></i></div><span class="tiny">${x}%</span></td></tr>`;
-      }).join('') || '<tr><td colspan="5" class="mut">Agrega personas en Equipo.</td></tr>'}</tbody>
-    </table></div>
   </div>`;
-  const b = document.getElementById('nuevoTab'); if (b) b.onclick = modalNuevoProceso;
+
+  document.getElementById('nuevoTab').onclick = modalNuevoProceso;
+  m.querySelectorAll('[data-persona]').forEach(el => el.onclick = () => {
+    S.filtros.resp = el.dataset.persona; S.vista = 'procesos'; render();
+  });
 }
 
 /* ── Lista de procesos ────────────────────────────────────────── */
 function vistaProcesos(m) {
   const ps = procesosFiltrados();
+  const grupos = [
+    { k: 'pendiente',  n: etiquetaEstado('pendiente'),  ayuda: 'Todavía se están llenando. Nadie los ha recibido.' },
+    { k: 'en_curso',   n: etiquetaEstado('en_curso'),   ayuda: 'En trabajo activo.' },
+    { k: 'en_revision',n: etiquetaEstado('en_revision'),ayuda: 'Ya se enviaron. Se pueden seguir editando y reenviar.' },
+    { k: 'aprobado',   n: etiquetaEstado('aprobado'),   ayuda: 'Cerrados y validados.' }
+  ];
+
   m.innerHTML = `
   <div class="topbar"><h1>Procesos</h1><div class="sp"></div>
+    ${esAdmin() ? '<button class="btn sm" id="verPapelera">Archivados</button>' : ''}
     ${puedeEditar() ? '<button class="btn p" id="nuevoP">+ Nuevo proceso</button>' : ''}</div>
 
-  <div class="card" style="margin-bottom:14px">
-    <div class="grid g4" style="gap:10px">
+  ${esAdmin() ? '' : '<div class="banner">Aquí ves los procesos que tienes a cargo.</div>'}
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="grid ${esAdmin() ? 'g3' : 'g2'}" style="gap:10px">
       <input type="text" id="fq" placeholder="Buscar por nombre o código…" value="${esc(S.filtros.q)}">
       <select id="fa"><option value="">Todas las áreas</option>${(S.config.areas || []).map(a => `<option ${S.filtros.area === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
-      <select id="fe"><option value="">Todos los estados</option>${ESTADOS.map(e => `<option value="${e.k}" ${S.filtros.estado === e.k ? 'selected' : ''}>${e.n}</option>`).join('')}</select>
-      <select id="fr"><option value="">Todos los responsables</option>${S.equipo.map(p => `<option value="${p.id}" ${S.filtros.resp === p.id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}</select>
+      ${esAdmin() ? `<select id="fr"><option value="">Todos los responsables</option>${S.equipo.map(p => `<option value="${p.id}" ${S.filtros.resp === p.id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}</select>` : ''}
     </div>
   </div>
 
-  <div class="card"><div class="tw"><table class="t">
-    <thead><tr><th style="width:78px">Código</th><th>Proceso</th><th>Área</th><th>Responsable</th><th>Estado</th><th style="width:130px">Avance</th><th style="width:82px">Evidencia</th></tr></thead>
-    <tbody>${ps.map(p => {
-      const av = avance(p), ev = p.evidencias || [];
-      return `<tr data-id="${p.id}" style="cursor:pointer">
-        <td class="mut">${esc(p.codigo || '—')}</td>
-        <td><b>${esc(p.nombre)}</b></td>
-        <td class="mut">${esc(p.area || '—')}</td>
-        <td class="mut">${esc(nombrePersona(p.responsable))}</td>
-        <td><span class="pill ${p.estado || 'pendiente'}">${(ESTADOS.find(e => e.k === p.estado) || ESTADOS[0]).n}</span></td>
-        <td><div class="bar"><i style="width:${av}%"></i></div><span class="tiny">${av}%</span></td>
-        <td class="tiny">📷 ${ev.filter(e => e.tipo === 'foto').length} · 🎙 ${ev.filter(e => e.tipo === 'audio').length}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan="7"><div class="empty"><span class="e">▤</span>No hay procesos todavía.</div></td></tr>'}
-    </tbody></table></div></div>`;
+  ${grupos.map(g => {
+    const suyos = ps.filter(p => (p.estado || 'pendiente') === g.k);
+    return `<section class="grupo">
+      <div class="grupo-cab">
+        <span class="pill ${g.k}">${esc(g.n)}</span>
+        <span class="tiny">${suyos.length}</span>
+        <span class="tiny right">${esc(g.ayuda)}</span>
+      </div>
+      ${suyos.length ? `<div class="card" style="padding:0"><div class="tw"><table class="t">
+        <tbody>${suyos.map(p => filaProceso(p)).join('')}</tbody></table></div></div>`
+        : '<div class="grupo-vacio">Ninguno por ahora.</div>'}
+    </section>`;
+  }).join('')}`;
 
-  const nb = document.getElementById('nuevoP'); if (nb) nb.onclick = modalNuevoProceso;
-  [['fq', 'q'], ['fa', 'area'], ['fe', 'estado'], ['fr', 'resp']].forEach(([id, k]) => {
+  const nb = document.getElementById('nuevoP');
+  if (nb) nb.onclick = modalNuevoProceso;
+  const pb = document.getElementById('verPapelera');
+  if (pb) pb.onclick = modalPapelera;
+
+  [['fq', 'q'], ['fa', 'area'], ['fr', 'resp']].forEach(([id, k]) => {
     const el = document.getElementById(id);
-    el.oninput = el.onchange = () => { S.filtros[k] = el.value; vistaProcesos(m); };
+    if (el) el.oninput = el.onchange = () => { S.filtros[k] = el.value; vistaProcesos(m); };
   });
   m.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => abrirProceso(tr.dataset.id));
+}
+
+function etiquetaEstado(k) {
+  return (ESTADOS.find(e => e.k === k) || { n: k }).n;
+}
+
+function filaProceso(p) {
+  const av = avance(p), ev = p.evidencias || [];
+  const plazo = textoPlazo(p.fechaLimite);
+  return `<tr data-id="${p.id}" style="cursor:pointer">
+    <td class="mut" style="width:74px">${esc(p.codigo || '—')}</td>
+    <td><b>${esc(p.nombre)}</b>
+      <div class="tiny">${esc(p.area || 'Sin área')}${p.contacto ? ' · contacto: ' + esc(p.contacto) : ''}</div></td>
+    ${esAdmin() ? `<td class="mut" style="width:130px">${esc(nombrePersona(p.responsable))}</td>` : ''}
+    <td style="width:120px">${plazo.html}</td>
+    <td style="width:120px"><div class="bar"><i style="width:${av}%"></i></div><span class="tiny">${av}%</span></td>
+    <td class="tiny" style="width:78px">📷 ${ev.filter(e => e.tipo === 'foto').length} · 🎙 ${ev.filter(e => e.tipo === 'audio').length}</td>
+  </tr>`;
+}
+
+/** La fecha de entrega, dicha como la diría una persona. */
+function textoPlazo(fecha) {
+  if (!fecha) return { html: '<span class="tiny mut">Sin fecha</span>', dias: null };
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const f = new Date(fecha + 'T00:00:00');
+  const dias = Math.round((f - hoy) / 86400000);
+  let txt, clase;
+  if (dias < 0) { txt = `Venció hace ${-dias} día(s)`; clase = 'plazo vencido'; }
+  else if (dias === 0) { txt = 'Vence hoy'; clase = 'plazo hoy'; }
+  else if (dias === 1) { txt = 'Vence mañana'; clase = 'plazo pronto'; }
+  else if (dias <= 3) { txt = `En ${dias} días`; clase = 'plazo pronto'; }
+  else { txt = f.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }); clase = 'plazo'; }
+  return { html: `<span class="${clase}">${txt}</span>`, dias };
+}
+
+function modalPapelera() {
+  modal('<h3>Procesos archivados</h3><div id="papBox"><div class="mut">Buscando…</div></div>' +
+        '<div class="flex" style="margin-top:14px"><button class="btn right" data-cerrar>Cerrar</button></div>',
+  async box => {
+    try {
+      const d = await api('/papelera');
+      const caja = box.querySelector('#papBox');
+      if (!d.procesos.length) {
+        caja.innerHTML = '<div class="mut">No hay nada archivado. Nada se ha perdido.</div>';
+        return;
+      }
+      caja.innerHTML = `<p class="mut" style="margin-top:-6px">Al eliminar, un proceso no se destruye: queda aquí. Puedes devolverlo con todo lo que tenía.</p>
+        <table class="t"><tbody>${d.procesos.map(p => `<tr>
+          <td><b>${esc(p.nombre)}</b><div class="tiny">${esc(p.codigo || '')} ${esc(p.area || '')}</div></td>
+          <td style="width:110px"><button class="btn sm" data-rest="${p.id}">Recuperar</button></td>
+        </tr>`).join('')}</tbody></table>`;
+      caja.querySelectorAll('[data-rest]').forEach(b => b.onclick = async () => {
+        await api('/procesos/' + b.dataset.rest + '/restaurar', { method: 'POST' });
+        const r = await api('/procesos');
+        S.procesos = r.procesos;
+        cerrarModal(); render(); toast('Proceso recuperado');
+      });
+    } catch (_) { box.querySelector('#papBox').innerHTML = '<div class="mut">No se pudo consultar.</div>'; }
+  });
 }
 
 function modalNuevoProceso() {
@@ -400,6 +542,11 @@ function modalNuevoProceso() {
     <div class="grid g2">
       <label class="f"><span class="lbl">Código</span><input type="text" id="mCod" value="P-${String(n).padStart(3, '0')}"></label>
       <label class="f"><span class="lbl">Área</span><select id="mArea">${(S.config.areas || []).map(a => `<option>${esc(a)}</option>`).join('')}</select></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span class="lbl">¿Con quién hablar en la clínica?</span>
+        <input type="text" id="mContacto" placeholder="Nombre y cargo"></label>
+      ${esAdmin() ? '<label class="f"><span class="lbl">Fecha de entrega</span><input type="date" id="mFecha"></label>' : ''}
     </div>
     ${esAdmin()
       ? `<label class="f"><span class="lbl">Responsable del levantamiento</span>
@@ -414,7 +561,9 @@ function modalNuevoProceso() {
         const d = await api('/procesos', { method: 'POST', body: {
           nombre, codigo: box.querySelector('#mCod').value.trim(),
           area: box.querySelector('#mArea').value,
-          responsable: esAdmin() ? (box.querySelector('#mResp').value || null) : null
+          responsable: esAdmin() ? (box.querySelector('#mResp').value || null) : null,
+          contacto: box.querySelector('#mContacto').value.trim(),
+          fechaLimite: esAdmin() && box.querySelector('#mFecha') ? (box.querySelector('#mFecha').value || null) : null
         }});
         cerrarModal();
         S.procesos.push({ id: d.id, nombre, codigo: box.querySelector('#mCod').value.trim(),
@@ -480,9 +629,10 @@ function vistaProceso(m) {
     <button class="btn sm" id="volver">← Procesos</button><div class="sp"></div>
     <span class="tiny" id="estadoGuardado"></span>
     ${ro ? '' : '<button class="btn sm" id="btnGuardar" title="Guardar ahora (Ctrl+S)">Guardar</button>'}
+    ${ro ? '' : '<button class="btn sm" id="btnHist" title="Ver y recuperar versiones anteriores">🕘 Historial</button>'}
     ${ro ? '' : '<button class="btn sm" id="btnQR">📱 Celular</button>'}
     ${ro ? '' : `<button class="btn sm p" id="btnEnviar">${p.enviosTotal ? '↻ Reenviar' : '✈ Enviar'}</button>`}
-    ${ro ? '' : '<button class="btn sm danger" id="btnBorrar">Eliminar</button>'}
+    ${ro ? '' : '<button class="btn sm danger" id="btnBorrar">Archivar</button>'}
   </div>
   <div class="card" style="margin-bottom:16px">
     <input type="text" id="pNombre" value="${esc(p.nombre)}" ${ro ? 'disabled' : ''}
@@ -492,6 +642,12 @@ function vistaProceso(m) {
       <label class="f" style="margin:0"><span class="lbl">Área</span><select id="pArea" ${ro ? 'disabled' : ''}>${(S.config.areas || []).map(a => `<option ${p.area === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></label>
       <label class="f" style="margin:0"><span class="lbl">Responsable${esAdmin() ? '' : ' <span class="tiny">(lo asigna el admin)</span>'}</span><select id="pResp" ${ro || !esAdmin() ? 'disabled' : ''}><option value="">— Sin asignar —</option>${S.equipo.map(x => `<option value="${x.id}" ${p.responsable === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
       <label class="f" style="margin:0"><span class="lbl">Estado</span><select id="pEstado" ${ro ? 'disabled' : ''}>${ESTADOS.map(e => `<option value="${e.k}" ${p.estado === e.k ? 'selected' : ''}>${e.n}</option>`).join('')}</select></label>
+    </div>
+    <div class="grid g2" style="gap:10px;margin-top:10px">
+      <label class="f" style="margin:0"><span class="lbl">Fecha de entrega${esAdmin() ? '' : ' <span class="tiny">(la fija el admin)</span>'}</span>
+        <input type="date" id="pFecha" value="${esc((p.fechaLimite || '').slice(0, 10))}" ${ro || !esAdmin() ? 'disabled' : ''}></label>
+      <label class="f" style="margin:0"><span class="lbl">¿Con quién hablar en la clínica?</span>
+        <input type="text" id="pContacto" value="${esc(p.contacto || '')}" placeholder="Nombre y cargo de quien conoce el proceso" ${ro ? 'disabled' : ''}></label>
     </div>
     ${p.enviosTotal ? `<div class="aviso-env tiny" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:color-mix(in srgb,var(--ok) 12%,transparent)">
       ✓ Enviado ${p.enviosTotal} ${p.enviosTotal === 1 ? 'vez' : 'veces'}. Puedes seguir editando y subiendo; al reenviar se actualiza el informe con el mismo enlace.
@@ -517,24 +673,28 @@ function vistaProceso(m) {
   const be = document.getElementById('btnEnviar');
   if (be) be.onclick = () => enviarProceso(p);
 
+  const bh = document.getElementById('btnHist');
+  if (bh) bh.onclick = () => modalHistorial(p);
+
   const bq = document.getElementById('btnQR');
   if (bq) bq.onclick = () => modalQR(p, '');
 
   const bb = document.getElementById('btnBorrar');
   if (bb) bb.onclick = () => modal(
-    `<h3>Eliminar proceso</h3><p>Se borrará <b>${esc(p.nombre)}</b> con sus respuestas, fotos y audios. No se puede deshacer.</p>
+    `<h3>Archivar proceso</h3><p><b>${esc(p.nombre)}</b> saldrá de la lista, pero no se borra nada: el administrador lo puede recuperar completo desde “Archivados”.</p>
      <div class="flex"><button class="btn" data-cerrar>Cancelar</button>
-     <button class="btn p right" id="okDel" style="background:var(--bad);border-color:var(--bad)">Eliminar</button></div>`,
+     <button class="btn p right" id="okDel" style="background:var(--bad);border-color:var(--bad)">Archivar</button></div>`,
     b => b.querySelector('#okDel').onclick = async () => {
       await api('/procesos/' + p.id, { method: 'DELETE' });
       S.procesos = S.procesos.filter(x => x.id !== p.id);
-      cerrarModal(); S.vista = 'procesos'; S.draft = null; render(); toast('Proceso eliminado');
+      cerrarModal(); S.vista = 'procesos'; S.draft = null; render(); toast('Proceso archivado');
     });
 
   if (!ro) [['pNombre', 'nombre'], ['pCod', 'codigo'], ['pArea', 'area'],
-            ['pResp', 'responsable'], ['pEstado', 'estado']].forEach(([id, campo]) => {
+            ['pResp', 'responsable'], ['pEstado', 'estado'],
+            ['pFecha', 'fechaLimite'], ['pContacto', 'contacto']].forEach(([id, campo]) => {
     const el = document.getElementById(id);
-    el.oninput = el.onchange = () => { p[campo] = el.value; guardarDebounce(); };
+    if (el && !el.disabled) el.oninput = el.onchange = () => { p[campo] = el.value; guardarDebounce(); };
   });
 
   pintarSecciones();
@@ -734,6 +894,7 @@ function campoHTML(c, v, grande) {
       : [{ actividad: '', responsable: inicial, sistema: '', tiempo: '', detalle: '', subtareas: [] }];
     ctrl = `${listaSugerencias('sug-resp', sugerenciasResponsable())}
       ${listaSugerencias('sug-sist', sugerenciasSistema())}
+      ${EXPLICA_NIVELES}
       <div class="rowlist" data-pasos="${c.id}">
         ${rows.map((r, i) => pasoHTML(r, i, ro, c.id)).join('')}
       </div>
@@ -756,8 +917,9 @@ function campoHTML(c, v, grande) {
 /** Nombres que se ofrecen como sugerencia en la columna Responsable. */
 function sugerenciasResponsable() {
   const nombres = S.equipo.map(x => x.nombre);
-  const roles = ['Admisionista', 'Enfermera', 'Médico', 'Auxiliar', 'Facturación',
-                 'Coordinadora', 'Paciente', 'Acompañante', 'Portería', 'Laboratorio'];
+  const roles = ['Admisionista', 'Enfermera', 'Médico', 'Optómetra', 'Auxiliar',
+                 'Facturación', 'Cajera', 'Coordinadora', 'Paciente', 'Acompañante',
+                 'Portería', 'Call center'];
   return [...new Set(nombres.concat(roles))];
 }
 
@@ -771,44 +933,97 @@ function listaSugerencias(id, valores) {
   return `<datalist id="${id}">${valores.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
 }
 
-/** Una actividad. Se puede abrir para explicar cómo se hace y desglosarla. */
+/** Las subtareas se guardaban como texto suelto; ahora cada una es un
+    objeto con su propia descripción y su propia evidencia. Esto convierte
+    lo viejo al leerlo, sin pedirle nada a nadie. */
+function normalizarSub(t) {
+  if (typeof t === 'string') return { texto: t, detalle: '' };
+  return { texto: (t && t.texto) || '', detalle: (t && t.detalle) || '' };
+}
+
+/* La explicación de qué es cada nivel. Es lo primero que ve quien llena
+   esta parte, porque es donde más se confunde la gente. */
+const EXPLICA_NIVELES = `<div class="niveles">
+  <div class="niv">
+    <span class="et">El proceso</span>
+    <span class="ej">Lo grande: “Atender al paciente en admisiones”</span>
+  </div>
+  <div class="flecha">▸</div>
+  <div class="niv">
+    <span class="et">Cada actividad</span>
+    <span class="ej">Un momento con principio y fin: “Registrarlo en Agilmed”.
+      Si cambia de lugar, de sistema o de persona, ya es <b>otra actividad</b>.</span>
+  </div>
+  <div class="flecha">▸</div>
+  <div class="niv">
+    <span class="et">Las sub-actividades</span>
+    <span class="ej">Los pasitos de adentro: “Buscar por cédula”, “Verificar la EPS”</span>
+  </div>
+</div>`;
+
+/** Una actividad, con su descripción y sus sub-actividades. */
 function pasoHTML(r, i, ro, cid) {
-  const subs = Array.isArray(r.subtareas) ? r.subtareas : [];
+  const subs = (Array.isArray(r.subtareas) ? r.subtareas : []).map(normalizarSub);
   const hayDetalle = (r.detalle || '').trim() || subs.length;
   const abierto = S.pasoAbierto === cid + '-' + i;
 
   return `<div class="actividad ${abierto ? 'abierta' : ''}" data-i="${i}">
     <div class="act-fila">
       <span class="num">${i + 1}</span>
-      <input type="text" data-k="actividad" value="${esc(r.actividad || '')}" placeholder="¿Qué hace en este paso?" ${ro}>
+      <input type="text" data-k="actividad" value="${esc(r.actividad || '')}"
+        placeholder="Actividad ${i + 1}: ¿qué hace en este momento?" ${ro}>
       <input type="text" data-k="responsable" value="${esc(r.responsable || '')}"
         placeholder="¿Quién?" list="sug-resp" ${ro}>
       <input type="text" data-k="sistema" value="${esc(r.sistema || '')}"
         placeholder="¿Dónde lo registra?" list="sug-sist" ${ro}>
-      <input type="text" data-k="tiempo" value="${esc(r.tiempo || '')}" placeholder="¿Cuánto tarda?" ${ro}>
+      <input type="text" data-k="tiempo" value="${esc(r.tiempo || '')}"
+        placeholder="¿Cuánto tarda?" ${ro}>
       <button class="btn sm ic ${hayDetalle ? 'con-detalle' : ''}" data-abrir="${cid}-${i}"
-        title="Explicar este paso en detalle">${abierto ? '▾' : (hayDetalle ? '⋯' : '+')}</button>
+        title="Explicar y desglosar esta actividad">${abierto ? '▾' : (hayDetalle ? `⋯${subs.length ? ' ' + subs.length : ''}` : '+')}</button>
       ${ro ? '<span></span>' : `<button class="btn sm ic" data-delpaso="${i}" title="Quitar">×</button>`}
     </div>
 
     ${abierto ? `<div class="act-detalle">
-      <label class="f" style="margin-bottom:12px">
-        <span class="lbl">¿Cómo se hace exactamente?</span>
-        <span class="hint">Qué datos escribe, qué revisa, qué botón oprime. Lo que le explicaría a alguien nuevo.</span>
-        <textarea data-detalle="${i}" placeholder="Ej: En Agilmed entro por Admisiones, busco por cédula. Si no aparece, lo creo con nombre, documento, fecha de nacimiento, EPS y teléfono." ${ro}>${esc(r.detalle || '')}</textarea>
-      </label>
+      <div class="f">
+        <span class="lbl">¿Cómo se hace esta actividad?</span>
+        <span class="hint">Lo que le explicaría a alguien que llega nuevo. Qué abre, qué busca, qué revisa.</span>
+        <textarea data-detalle="${i}" ${ro}
+          placeholder="Ej: Entro a Agilmed por el módulo de Admisiones y busco al paciente por número de cédula.">${esc(r.detalle || '')}</textarea>
+        ${ro ? '' : herramientasEvidencia(`${cid}:${i}`, 'esta actividad')}
+        <div class="ev" data-ev="${cid}:${i}"></div>
+      </div>
 
-      <span class="lbl">Sub-actividades o tareas de este paso</span>
-      <span class="hint">Una por línea. Útil cuando el paso tiene varios pedazos.</span>
+      <div class="sub-cab">
+        <span class="lbl" style="margin:0;flex:1">Sub-actividades: los pasitos de adentro</span>
+        <span class="tiny">${subs.length}</span>
+      </div>
       <div class="subtareas" data-subs="${i}">
-        ${subs.map((t, j) => `<div class="sub">
-          <span class="vi">${i + 1}.${j + 1}</span>
-          <input type="text" data-sub="${j}" value="${esc(t)}" placeholder="Ej: Verificar que la EPS esté activa" ${ro}>
-          ${ro ? '' : `<button class="btn sm ic" data-delsub="${i}-${j}">×</button>`}
+        ${subs.map((t, j) => `<div class="sub" data-j="${j}">
+          <div class="sub-fila">
+            <span class="vi">${i + 1}.${j + 1}</span>
+            <input type="text" data-sub="${j}" value="${esc(t.texto)}"
+              placeholder="Ej: Verificar que la EPS esté activa" ${ro}>
+            ${ro ? '' : `<button class="btn sm ic" data-delsub="${i}-${j}" title="Quitar">×</button>`}
+          </div>
+          <textarea data-subdet="${j}" class="sub-det" ${ro}
+            placeholder="Detalle de este pasito (opcional)">${esc(t.detalle)}</textarea>
+          ${ro ? '' : herramientasEvidencia(`${cid}:${i}:${j}`, 'este pasito')}
+          <div class="ev" data-ev="${cid}:${i}:${j}"></div>
         </div>`).join('')}
       </div>
       ${ro ? '' : `<button class="btn sm" data-addsub="${i}" style="margin-top:8px">+ Sub-actividad</button>`}
     </div>` : ''}
+  </div>`;
+}
+
+/** Los mismos botones de evidencia, reutilizables en cualquier nivel. */
+function herramientasEvidencia(ref, queEs) {
+  return `<div class="ftools">
+    <button class="btn sm ic" data-mic="${ref}" title="Grabar audio sobre ${queEs}">🎙</button>
+    <button class="btn sm ic" data-cam="${ref}" title="Tomar foto de ${queEs}">📷</button>
+    <button class="btn sm ic" data-file="${ref}" title="Subir imagen">🖼</button>
+    <button class="btn sm ic" data-qr="${ref}" title="Capturar desde el celular">📱</button>
+    <span class="rec-slot" data-recslot="${ref}"></span>
   </div>`;
 }
 
@@ -847,13 +1062,18 @@ function conectarCampos(cont) {
       const det = fila.querySelector('[data-detalle]');
       if (det) o.detalle = det.value;
       const subs = fila.querySelector('[data-subs]');
-      if (subs) o.subtareas = [...subs.querySelectorAll('input[data-sub]')].map(x => x.value).filter(x => x.trim());
+      if (subs) {
+        o.subtareas = [...subs.querySelectorAll('.sub[data-j]')].map(el => ({
+          texto: (el.querySelector('input[data-sub]') || {}).value || '',
+          detalle: (el.querySelector('textarea[data-subdet]') || {}).value || ''
+        })).filter(x => x.texto.trim() || x.detalle.trim());
+      }
       return o;
     });
 
     const aplicar = () => { p.respuestas[cid] = leer(); refrescarAvance(); guardarDebounce(); };
 
-    box.querySelectorAll('input[data-k], [data-detalle], input[data-sub]')
+    box.querySelectorAll('input[data-k], [data-detalle], input[data-sub], [data-subdet]')
        .forEach(i => i.oninput = aplicar);
 
     box.querySelectorAll('[data-abrir]').forEach(b => b.onclick = () => {
@@ -870,14 +1090,14 @@ function conectarCampos(cont) {
 
     box.querySelectorAll('[data-addsub]').forEach(b => b.onclick = () => {
       const rows = leer(); const i = +b.dataset.addsub;
-      rows[i].subtareas = (rows[i].subtareas || []).concat(['']);
+      rows[i].subtareas = (rows[i].subtareas || []).map(normalizarSub).concat([{ texto: '', detalle: '' }]);
       p.respuestas[cid] = rows; guardarDebounce(); pintarSecciones();
     });
 
     box.querySelectorAll('[data-delsub]').forEach(b => b.onclick = () => {
       const [i, j] = b.dataset.delsub.split('-').map(Number);
       const rows = leer();
-      rows[i].subtareas = (rows[i].subtareas || []).filter((_, k) => k !== j);
+      rows[i].subtareas = (rows[i].subtareas || []).map(normalizarSub).filter((_, k) => k !== j);
       p.respuestas[cid] = rows; guardarDebounce(); pintarSecciones();
     });
   });
@@ -1084,47 +1304,140 @@ function comprimir(file, max = 1600, q = 0.82) {
 }
 
 /* ── Grabación de voz ─────────────────────────────────────────── */
-async function toggleGrabacion(campo) {
+/* ═══════════════════════════════════════════════════════════════
+   Grabación de voz
+
+   Las entrevistas duran minutos, no segundos, y el navegador conspira
+   contra eso: apaga la pantalla, suspende la pestaña, corta el micrófono.
+   Por eso aquí hay más defensas que en el resto de la aplicación.
+   ═══════════════════════════════════════════════════════════════ */
+async function toggleGrabacion(ref) {
   if (S.rec) { detenerGrabacion(); return; }
-  if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Este navegador no permite grabar'); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    toast('Este navegador no permite grabar'); return;
+  }
 
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-  catch (_) { toast('Sin permiso de micrófono'); return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true }
+    });
+  } catch (_) { toast('Sin permiso de micrófono'); return; }
 
   let mime = 'audio/webm', ext = 'webm';
   if (window.MediaRecorder.isTypeSupported && !MediaRecorder.isTypeSupported('audio/webm')) {
     if (MediaRecorder.isTypeSupported('audio/mp4')) { mime = 'audio/mp4'; ext = 'm4a'; }
     else { mime = ''; ext = 'm4a'; }
   }
+
   const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   const trozos = [];
-  mr.ondataavailable = e => { if (e.data.size) trozos.push(e.data); };
+  const grupo = 'g_' + Date.now();
+  let n = 0;
+  const tipoReal = () => (mr.mimeType ? mr.mimeType.split(';')[0] : (mime || 'audio/mp4'));
+
+  mr.ondataavailable = e => {
+    if (!e.data || !e.data.size) return;
+    trozos.push(e.data);
+    // Cada trozo se guarda en disco apenas llega: si el navegador mata la
+    // página a mitad de la entrevista, lo grabado hasta ahí no se pierde.
+    Almacen.guardarTrozo(grupo, {
+      campo: ref, tipo: tipoReal(), nombre: 'nota.' + ext,
+      duracion: S.recT, procesoId: S.draft ? S.draft.id : ''
+    }, e.data, n++).catch(() => {});
+  };
+
+  mr.onerror = () => { toast('La grabación se interrumpió. Se guarda lo que alcanzó.'); detenerGrabacion(); };
+
   mr.onstop = async () => {
     stream.getTracks().forEach(t => t.stop());
-    const tipoReal = mr.mimeType ? mr.mimeType.split(';')[0] : (mime || 'audio/mp4');
-    await subirEvidencia(campo, 'audio', new Blob(trozos, { type: tipoReal }), 'nota.' + ext, S.recT);
+    soltarPantalla();
+    const blob = new Blob(trozos, { type: tipoReal() });
+    Almacen.borrarGrabacion(grupo).catch(() => {});
+    if (blob.size) await subirEvidencia(ref, 'audio', blob, 'nota.' + ext, S.recT);
+    else toast('No se grabó nada. Revisa el permiso del micrófono.');
   };
-  mr.start();
-  S.rec = mr; S.recCampo = campo; S.recT = 0;
 
-  const slot = document.querySelector(`[data-recslot="${campo}"]`);
-  if (slot) slot.innerHTML = '<span class="rec"><span class="blink"></span><span id="recTime">0:00</span> · toca 🎙 para detener</span>';
+  // Si el micrófono se corta solo (bloqueo de pantalla, otra app lo toma),
+  // no se pierde: se cierra la grabación y se sube lo que haya.
+  stream.getAudioTracks().forEach(t => {
+    t.onended = () => { if (S.rec) { toast('El micrófono se cerró. Se guarda lo grabado.'); detenerGrabacion(); } };
+  });
+
+  mr.start(4000);                    // un trozo cada 4 segundos
+  S.rec = mr; S.recCampo = ref; S.recT = 0;
+  mantenerPantalla();
+  panelGrabando();
+
   S.recTimer = setInterval(() => {
     S.recT++;
     const t = document.getElementById('recTime');
     if (t) t.textContent = Math.floor(S.recT / 60) + ':' + String(S.recT % 60).padStart(2, '0');
-    if (S.recT >= 600) detenerGrabacion();
+    if (mr.state === 'inactive' && S.rec) { detenerGrabacion(); return; }
+    if (S.recT >= 3600) detenerGrabacion();          // tope de una hora
   }, 1000);
+}
+
+/** Panel a pantalla completa: además de ser claro, evita que la página
+    se redibuje por debajo y deje la grabación huérfana. */
+function panelGrabando() {
+  const d = document.createElement('div');
+  d.className = 'grabando'; d.id = 'panelGrab';
+  d.innerHTML = `
+    <div class="onda">🎙</div>
+    <div class="t" id="recTime">0:00</div>
+    <div style="opacity:.75;font-size:14px">Grabando</div>
+    <button class="btn p" id="gStop" style="padding:14px 34px;font-size:16px">Detener y guardar</button>
+    <div class="tiny" style="color:#9fb0c0;max-width:280px;text-align:center">
+      Se guarda cada 4 segundos. Puede hablar todo lo que necesite: el tope es una hora.
+    </div>`;
+  document.body.appendChild(d);
+  document.getElementById('gStop').onclick = detenerGrabacion;
 }
 
 function detenerGrabacion() {
   if (!S.rec) return;
-  try { S.rec.stop(); } catch (_) {}
+  const mr = S.rec;
+  S.rec = null;
   clearInterval(S.recTimer);
+  try { if (mr.state !== 'inactive') mr.stop(); } catch (_) {}
+  const panel = document.getElementById('panelGrab');
+  if (panel) panel.remove();
   const slot = document.querySelector(`[data-recslot="${S.recCampo}"]`);
   if (slot) slot.innerHTML = '';
-  S.rec = null; S.recCampo = null;
+  S.recCampo = null;
+}
+
+/* Mantener la pantalla encendida mientras se graba. Sin esto, el equipo se
+   bloquea a los pocos segundos y el micrófono se corta con él. */
+let _wake = null;
+async function mantenerPantalla() {
+  try { if ('wakeLock' in navigator) _wake = await navigator.wakeLock.request('screen'); }
+  catch (_) {}
+}
+function soltarPantalla() {
+  try { if (_wake) { _wake.release(); _wake = null; } } catch (_) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && S.rec && !_wake) mantenerPantalla();
+});
+
+/** Al abrir la app, sube lo que quedó de una grabación interrumpida. */
+async function recuperarGrabacionesPendientes() {
+  try {
+    const gs = await Almacen.recuperarGrabaciones();
+    for (const g of gs) {
+      if (!g.procesoId || !g.trozos.length) continue;
+      const blob = new Blob(g.trozos, { type: g.tipo || 'audio/webm' });
+      await Almacen.encolarArchivo({
+        url: '/api/procesos/' + g.procesoId + '/evidencias',
+        procesoId: g.procesoId, blob, nombre: g.nombre || 'nota.webm',
+        campos: { tipo: 'audio', campo: g.campo || '', duracion: String(g.duracion || 0) }
+      });
+      await Almacen.borrarGrabacion(g.id);
+      toast('Se recuperó una grabación interrumpida');
+    }
+  } catch (_) {}
 }
 
 function lightbox(src) {
@@ -1514,6 +1827,7 @@ async function modalQR(p, campoId) {
 
 /* Arranque de la cola: reintenta lo que quedó pendiente de sesiones previas. */
 Almacen.procesar();
+recuperarGrabacionesPendientes();
 Almacen.contar().then(n => { if (n) pintarBadgeCola(n); });
 window.addEventListener('online', () => pintarBadgeCola(0) || Almacen.procesar());
 
@@ -1794,4 +2108,46 @@ function conectarEditores(cont) {
       guardar();
     });
   });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Historial: recuperar lo que se borró por accidente
+   ═══════════════════════════════════════════════════════════════ */
+async function modalHistorial(p) {
+  modal(`<h3>Historial de ${esc(p.nombre)}</h3>
+    <p class="mut" style="margin-top:-6px">Cada vez que alguien guarda, se conserva cómo estaba antes. Si se borró algo sin querer, aquí se recupera.</p>
+    <div id="histBox"><div class="mut">Buscando…</div></div>
+    <div class="flex" style="margin-top:14px"><button class="btn right" data-cerrar>Cerrar</button></div>`,
+  async box => {
+    const caja = box.querySelector('#histBox');
+    try {
+      const d = await api('/procesos/' + p.id + '/versiones');
+      if (!d.versiones.length) {
+        caja.innerHTML = '<div class="mut">Todavía no hay versiones anteriores.</div>';
+        return;
+      }
+      caja.innerHTML = `<table class="t"><tbody>${d.versiones.map((v, i) => `<tr>
+        <td><b>${esc(fechaLarga(v.creado))}</b>
+          <div class="tiny">${esc(v.por || '')} · ${esc(v.motivo || '')}${i === 0 ? ' · la más reciente' : ''}</div></td>
+        <td style="width:110px"><button class="btn sm" data-ver="${v.id}">Recuperar</button></td>
+      </tr>`).join('')}</tbody></table>`;
+
+      caja.querySelectorAll('[data-ver]').forEach(b => b.onclick = async () => {
+        if (!confirm('Se va a reemplazar lo que hay ahora por esta versión. Lo actual queda guardado en el historial, así que también se puede deshacer.')) return;
+        await api(`/procesos/${p.id}/versiones/${b.dataset.ver}/restaurar`, { method: 'POST' });
+        const r = await api('/procesos');
+        S.procesos = r.procesos;
+        const fresco = S.procesos.find(x => x.id === p.id);
+        if (fresco) { S.draft = JSON.parse(JSON.stringify(fresco)); }
+        cerrarModal(); render(); toast('Versión recuperada');
+      });
+    } catch (_) { caja.innerHTML = '<div class="mut">No se pudo consultar el historial.</div>'; }
+  });
+}
+
+function fechaLarga(iso) {
+  try {
+    return new Date(iso.replace(' ', 'T')).toLocaleString('es-CO',
+      { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (_) { return iso; }
 }

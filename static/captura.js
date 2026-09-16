@@ -21,7 +21,7 @@ const URL_SUBIDA = '/api/capture/' + T + '/evidencias';
 
 const C = {
   info: null, error: null, campo: '',
-  rec: null, recT: 0, recTimer: null, recId: null, trozos: [],
+  rec: null, recT: 0, recTimer: null, recId: null, trozos: [], nTrozo: 0, wake: null,
   pendientes: [], aviso: null
 };
 
@@ -406,28 +406,39 @@ async function grabar() {
 
   const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   C.trozos = [];
+  C.nTrozo = 0;
   C.recId = 'g_' + Date.now();
+
+  // El celular se bloquea a los pocos segundos y con él se va el micrófono.
+  try { if ('wakeLock' in navigator) C.wake = await navigator.wakeLock.request('screen'); }
+  catch (_) {}
+
+  mr.onerror = () => { avisar('La grabación se interrumpió. Se guarda lo que alcanzó.', 'bad'); detener(); };
+  stream.getAudioTracks().forEach(t => {
+    t.onended = () => { if (C.rec) { avisar('El micrófono se cerró. Se guarda lo grabado.', 'warn'); detener(); } };
+  });
   const tipoReal = () => (mr.mimeType ? mr.mimeType.split(';')[0] : (mime || 'audio/mp4'));
 
   mr.ondataavailable = async e => {
     if (!e.data.size) return;
     C.trozos.push(e.data);
     try {
-      await Almacen.guardarTrozos(C.recId, {
+      await Almacen.guardarTrozo(C.recId, {
         token: T, campo: C.campo, tipo: tipoReal(), nombre: 'nota.' + ext, duracion: C.recT
-      }, C.trozos);
+      }, e.data, C.nTrozo++);
     } catch (_) {}
   };
 
   mr.onstop = async () => {
     stream.getTracks().forEach(t => t.stop());
+    try { if (C.wake) { C.wake.release(); C.wake = null; } } catch (_) {}
     const blob = new Blob(C.trozos, { type: tipoReal() });
     try { await Almacen.borrarGrabacion(C.recId); } catch (_) {}
     if (blob.size) await encolar(blob, 'audio', C.campo, 'nota.' + ext, C.recT);
     C.trozos = []; C.recId = null;
   };
 
-  mr.start(5000);
+  mr.start(4000);
   C.rec = mr; C.recT = 0;
   pantallaGrabando();
   C.recTimer = setInterval(() => {
@@ -447,7 +458,8 @@ function pantallaGrabando() {
     <div style="opacity:.75;font-size:14px">Grabando la entrevista</div>
     <button class="btn p" id="gStop" style="padding:14px 34px;font-size:16px">Detener y guardar</button>
     <div class="tiny" style="color:#9fb0c0;max-width:260px;text-align:center">
-      Se guarda cada 5 segundos. Si se cierra la app por accidente, lo grabado no se pierde.</div>`;
+      Se guarda cada 4 segundos. Puede hablar todo lo que necesite: el tope es una hora.
+      La pantalla se queda encendida sola.</div>`;
   document.body.appendChild(d);
   document.getElementById('gStop').onclick = detener;
 }
@@ -462,8 +474,12 @@ function detener() {
 }
 
 /* Al volver de la cámara o de otra app, se relee del servidor. */
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && C.info) refrescar();
+document.addEventListener('visibilitychange', async () => {
+  if (document.hidden) return;
+  if (C.rec && !C.wake) {
+    try { if ('wakeLock' in navigator) C.wake = await navigator.wakeLock.request('screen'); } catch (_) {}
+  }
+  if (C.info && !C.rec) refrescar();
 });
 window.addEventListener('pageshow', () => { if (C.info) refrescar(); });
 window.addEventListener('online', () => { Almacen.procesar(); pintarEstado(); });

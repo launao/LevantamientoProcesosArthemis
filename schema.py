@@ -106,6 +106,16 @@ def _ddl():
               creado     {ts}
             )""",
 
+        f"""CREATE TABLE IF NOT EXISTS versiones (
+              id          {txt} PRIMARY KEY,
+              proceso_id  {txt} NOT NULL,
+              respuestas  {txt} NOT NULL,
+              nombre      {txt},
+              usuario_id  {txt},
+              motivo      {txt},
+              creado      {ts}
+            )""",
+
         f"""CREATE TABLE IF NOT EXISTS share_tokens (
               token      {txt} PRIMARY KEY,
               proceso_id {txt} NOT NULL,
@@ -133,6 +143,7 @@ def _ddl():
         "CREATE INDEX IF NOT EXISTS ix_aud_creado ON auditoria(creado)",
         "CREATE INDEX IF NOT EXISTS ix_tok_proc ON capture_tokens(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_env_proc ON envios(proceso_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ver_proc ON versiones(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_share_proc ON share_tokens(proceso_id)",
     ]
 
@@ -146,6 +157,9 @@ COLUMNAS_NUEVAS = [
     ("procesos", "enviado_en", "TEXT"),
     ("procesos", "enviado_por", "TEXT"),
     ("procesos", "envios_total", "INTEGER DEFAULT 0"),
+    ("procesos", "fecha_limite", "TEXT"),
+    ("procesos", "contacto", "TEXT"),
+    ("procesos", "eliminado", "INTEGER DEFAULT 0"),
 ]
 
 
@@ -291,9 +305,9 @@ PLANTILLA_DEFAULT = {"secciones": [
 CONFIG_DEFAULT = {
     "proyecto": os.environ.get("APP_NOMBRE", "Levantamiento de Procesos"),
     "organizacion": os.environ.get("APP_ORG", ""),
-    "areas": ["Urgencias", "Hospitalización", "Consulta Externa", "Cirugía",
-              "Laboratorio", "Imágenes", "Farmacia", "Admisiones",
-              "Facturación", "Calidad", "TI", "Talento Humano"],
+    "areas": ["Admisiones", "Call center", "Caja", "Tesorería", "Facturación",
+              "Optometría", "Oftalmología", "Dilatación", "Enfermería",
+              "Cirugía", "Calidad", "TI"],
     "estados": [
         {"k": "pendiente", "n": "Borrador"},
         {"k": "en_curso", "n": "En curso"},

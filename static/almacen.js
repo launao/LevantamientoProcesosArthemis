@@ -201,30 +201,53 @@ const Almacen = (() => {
   /* Los trozos de audio se van escribiendo mientras se graba. Si el
      navegador se cierra a mitad, al volver a abrir se recupera lo grabado. */
 
-  async function guardarTrozos(id, meta, trozos) {
+  /** Guarda UN trozo. Cada uno es un registro aparte, así una grabación
+      de media hora no obliga a reescribir media hora de audio cada vez. */
+  async function guardarTrozo(grupo, meta, trozo, n) {
     const db = await abrir();
     return new Promise((res, rej) => {
       const t = db.transaction('grabacion', 'readwrite');
-      t.objectStore('grabacion').put(Object.assign({ id, trozos, ts: Date.now() }, meta));
+      t.objectStore('grabacion').put(Object.assign(
+        { id: grupo + '#' + String(n).padStart(5, '0'), grupo, trozo, n, ts: Date.now() }, meta));
       t.oncomplete = res; t.onerror = () => rej(t.error);
     });
   }
 
+  /** Devuelve las grabaciones interrumpidas, ya rearmadas en orden. */
   async function recuperarGrabaciones() {
     const db = await abrir();
-    return new Promise((res, rej) => {
+    const filas = await new Promise((res, rej) => {
       const t = db.transaction('grabacion', 'readonly');
       const r = t.objectStore('grabacion').getAll();
       r.onsuccess = () => res(r.result || []);
       t.onerror = () => rej(t.error);
     });
+    const grupos = {};
+    filas.forEach(f => {
+      const g = f.grupo || f.id;
+      if (!grupos[g]) grupos[g] = Object.assign({}, f, { id: g, trozos: [] });
+      if (f.trozo) grupos[g].trozos.push({ n: f.n || 0, b: f.trozo });
+      if (Array.isArray(f.trozos)) f.trozos.forEach((b, i) => grupos[g].trozos.push({ n: i, b }));
+      grupos[g].duracion = Math.max(grupos[g].duracion || 0, f.duracion || 0);
+    });
+    return Object.values(grupos).map(g => {
+      g.trozos = g.trozos.sort((a, b) => a.n - b.n).map(x => x.b);
+      return g;
+    }).filter(g => g.trozos.length);
   }
 
-  async function borrarGrabacion(id) {
+  async function borrarGrabacion(grupo) {
     const db = await abrir();
+    const filas = await new Promise((res, rej) => {
+      const t = db.transaction('grabacion', 'readonly');
+      const r = t.objectStore('grabacion').getAll();
+      r.onsuccess = () => res(r.result || []);
+      t.onerror = () => rej(t.error);
+    });
+    const ids = filas.filter(f => (f.grupo || f.id) === grupo).map(f => f.id);
     return new Promise((res, rej) => {
       const t = db.transaction('grabacion', 'readwrite');
-      t.objectStore('grabacion').delete(id);
+      ids.forEach(id => t.objectStore('grabacion').delete(id));
       t.oncomplete = res; t.onerror = () => rej(t.error);
     });
   }
@@ -245,6 +268,6 @@ const Almacen = (() => {
   return {
     encolarArchivo, pendientes, contar, quitar, procesar, alCambiar,
     guardarBorrador, leerBorrador, borrarBorrador,
-    guardarTrozos, recuperarGrabaciones, borrarGrabacion
+    guardarTrozo, recuperarGrabaciones, borrarGrabacion
   };
 })();
