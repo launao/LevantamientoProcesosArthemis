@@ -29,6 +29,17 @@ function opcionesDe(c) {
   }
   return c.opciones || [];
 }
+const ROLES = [
+  { k: 'admin', n: 'Administrador',
+    d: 'Reparte los procesos, fija las fechas y configura la plantilla, las listas y el equipo. Ve todo.' },
+  { k: 'analista', n: 'Analista — levanta procesos',
+    d: 'Ve y edita únicamente los procesos que tiene a cargo. Los levanta, sube fotos y audios, y los envía.' },
+  { k: 'clinica', n: 'Cliente / clínica',
+    d: 'La contraparte de la institución: ve la agenda y el avance, designa quién atiende de su lado, escribe el cuadro “tener en cuenta”, propone procesos nuevos y consulta los informes. No edita levantamientos.' },
+  { k: 'lector', n: 'Lector — solo consulta',
+    d: 'Solo mira y exporta. No escribe nada.' }
+];
+
 const TIPOS_CAMPO = [
   { k: 'texto', n: 'Texto corto' },
   { k: 'parrafo', n: 'Párrafo' },
@@ -1556,7 +1567,10 @@ function vistaEquipo(m) {
   m.innerHTML = `
   <div class="topbar"><h1>Equipo</h1><div class="sp"></div>
     ${esAdmin() ? '<button class="btn p" id="addP">+ Agregar persona</button>' : ''}</div>
-  <div class="banner">Cada persona entra con su usuario desde computador o celular. Roles: <b>admin</b> configura todo · <b>analista</b> levanta procesos · <b>lector</b> solo consulta y exporta.</div>
+  <div class="banner">
+    Cada persona entra con su usuario desde el computador o el celular.<br>
+    ${ROLES.map(r => `<b>${esc(r.n.split(' — ')[0].split(' / ')[0])}</b>: ${esc(r.d.split('.')[0])}.`).join('<br>')}
+  </div>
   <div class="card"><div class="tw"><table class="t">
     <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Contacto</th><th>Procesos</th>${esAdmin() ? '<th style="width:90px"></th>' : ''}</tr></thead>
     <tbody>${S.equipo.map(p => {
@@ -1565,7 +1579,7 @@ function vistaEquipo(m) {
       return `<tr><td><span class="flex" style="gap:8px">${puntoPresencia(p)}<b>${esc(p.nombre)}</b></span>
           <div class="tiny" style="margin-left:18px">${esc(pr.texto)}</div></td>
         <td class="mut">${esc(p.usuario)}</td>
-        <td><span class="chip">${esc(p.rol)}</span></td><td class="mut">${esc(p.contacto || '—')}</td><td>${n}</td>
+        <td><span class="chip">${esc((ROLES.find(r => r.k === p.rol) || { n: p.rol }).n)}</span></td><td class="mut">${esc(p.contacto || '—')}</td><td>${n}</td>
         ${esAdmin() ? `<td><button class="btn sm ic" data-edit="${p.id}">✎</button>
           ${p.id !== S.yo.id ? `<button class="btn sm ic danger" data-del="${p.id}">×</button>` : ''}</td>` : ''}</tr>`;
     }).join('')}</tbody></table></div></div>`;
@@ -1589,13 +1603,25 @@ function modalPersona(p) {
     </div>
     <div class="grid g2">
       <label class="f"><span class="lbl">Rol</span><select id="eRol">
-        ${['admin', 'analista', 'lector'].map(r => `<option value="${r}" ${ed && p.rol === r ? 'selected' : (!ed && r === 'analista' ? 'selected' : '')}>${r}</option>`).join('')}</select></label>
+        ${ROLES.map(r => `<option value="${r.k}" ${ed && p.rol === r.k ? 'selected' : (!ed && r.k === 'analista' ? 'selected' : '')}>${esc(r.n)}</option>`).join('')}</select>
+        <span class="hint" id="rolAyuda" style="margin-top:6px"></span></label>
       <label class="f"><span class="lbl">Contacto</span><input type="text" id="eCon" value="${esc(ed ? p.contacto || '' : '')}"></label>
     </div>
     <label class="f"><span class="lbl">${ed ? 'Nueva contraseña (opcional)' : 'Contraseña'} ${ed ? '' : '<span class="req">*</span>'}</span>
       <input type="password" id="ePwd" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></label>
     <div class="flex"><button class="btn" data-cerrar>Cancelar</button><button class="btn p right" id="eOk">Guardar</button></div>`,
   box => {
+    // La descripción cambia con la selección: los nombres de rol solos no
+    // dicen gran cosa, y equivocarse aquí da acceso de más o de menos.
+    const selRol = box.querySelector('#eRol');
+    const ayuda = box.querySelector('#rolAyuda');
+    const pintarAyuda = () => {
+      const r = ROLES.find(x => x.k === selRol.value);
+      ayuda.textContent = r ? r.d : '';
+    };
+    selRol.onchange = pintarAyuda;
+    pintarAyuda();
+
     box.querySelector('#eOk').onclick = async () => {
       const body = {
         nombre: box.querySelector('#eNom').value.trim(),
