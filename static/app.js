@@ -561,6 +561,9 @@ function filaProceso(p) {
     <td style="width:120px">${plazo.html}</td>
     <td style="width:120px"><div class="bar"><i style="width:${av}%"></i></div><span class="tiny">${av}%</span></td>
     <td class="tiny" style="width:78px">📷 ${ev.filter(e => e.tipo === 'foto').length} · 🎙 ${ev.filter(e => e.tipo === 'audio').length}</td>
+    <td style="width:46px">${p.informeUrl
+      ? `<a class="btn sm ic" href="${esc(p.informeUrl)}" target="_blank" rel="noopener"
+           title="Abrir el informe" onclick="event.stopPropagation()">📄</a>` : ''}</td>
   </tr>`;
 }
 
@@ -701,6 +704,7 @@ function vistaProceso(m) {
     <button class="btn sm" id="volver">← Procesos</button><div class="sp"></div>
     <span class="tiny" id="estadoGuardado"></span>
     ${ro ? '' : '<button class="btn sm" id="btnGuardar" title="Guardar ahora (Ctrl+S)">Guardar</button>'}
+    ${p.informeUrl ? '<button class="btn sm" id="btnInforme" title="Ver y compartir el informe enviado">📄 Informe</button>' : ''}
     ${ro ? '' : '<button class="btn sm" id="btnHist" title="Ver y recuperar versiones anteriores">🕘 Historial</button>'}
     ${ro ? '' : '<button class="btn sm" id="btnQR">📱 Celular</button>'}
     ${ro ? '' : `<button class="btn sm p" id="btnEnviar">${p.enviosTotal ? '↻ Reenviar' : '✈ Enviar'}</button>`}
@@ -751,6 +755,9 @@ function vistaProceso(m) {
   pintarEstadoGuardado(S.dirty ? 'escribiendo' : 'guardado');
   const be = document.getElementById('btnEnviar');
   if (be) be.onclick = () => enviarProceso(p);
+
+  const bi = document.getElementById('btnInforme');
+  if (bi) bi.onclick = () => modalInforme(p);
 
   const bh = document.getElementById('btnHist');
   if (bh) bh.onclick = () => modalHistorial(p);
@@ -1982,8 +1989,13 @@ async function enviarProceso(p, forzar) {
     });
     p.estado = 'en_revision';
     p.enviosTotal = d.numero;
+    p.informeUrl = d.url;
     const i = S.procesos.findIndex(x => x.id === p.id);
-    if (i >= 0) { S.procesos[i].estado = 'en_revision'; S.procesos[i].enviosTotal = d.numero; }
+    if (i >= 0) {
+      S.procesos[i].estado = 'en_revision';
+      S.procesos[i].enviosTotal = d.numero;
+      S.procesos[i].informeUrl = d.url;
+    }
     modalCompartir(p, d);
   } catch (e) {
     if (e.status === 422) return modalFaltantes(p, e.data);
@@ -2941,6 +2953,8 @@ function vistaAvanceClinica(m) {
           <div class="tiny">${esc(p.area || '')}${p.atiende ? ' · atendió ' + esc(p.atiende) : ''}</div></td>
         <td style="width:110px"><span class="pill ${p.estado}">${esc(etiquetaEstado(p.estado))}</span></td>
         <td style="width:120px"><div class="bar"><i style="width:${avance(p)}%"></i></div></td>
+        <td style="width:120px">${p.informeUrl
+          ? `<a class="btn sm" href="${esc(p.informeUrl)}" target="_blank" rel="noopener">Leer informe</a>` : ''}</td>
       </tr>`).join('')}</tbody></table></div>`
       : '<div class="mut">Todavía ninguno. Aparecen aquí a medida que el equipo los va enviando.</div>'}
   </div>`;
@@ -2990,5 +3004,74 @@ function modalProponer() {
       } catch (_) { toast('No se pudo proponer'); }
     };
     setTimeout(() => box.querySelector('#ppNombre').focus(), 50);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Volver al informe ya enviado
+
+   El enlace no se pierde al cerrar la ventana de envío: sigue siendo
+   el mismo y se puede recuperar aquí cuantas veces haga falta.
+   ═══════════════════════════════════════════════════════════════ */
+async function modalInforme(p) {
+  const url = p.informeUrl;
+  if (!url) { toast('Este proceso todavía no se ha enviado'); return; }
+
+  const texto = `*${p.nombre}*\n${[p.codigo, p.area].filter(Boolean).join(' · ')}\n\n` +
+    `Puedes ver el informe completo, con las fotos y escuchar los audios, aquí:\n${url}`;
+  const wa = 'https://wa.me/?text=' + encodeURIComponent(texto);
+  const correo = 'mailto:?subject=' + encodeURIComponent('Levantamiento: ' + p.nombre) +
+                 '&body=' + encodeURIComponent(texto);
+
+  modal(`<h3>Informe de ${esc(p.nombre)}</h3>
+    <p class="mut" style="margin-top:-6px">
+      Este enlace siempre muestra la última versión enviada. Si el proceso se
+      reenvía, quien ya lo tenga verá la versión nueva sin que le mandes nada.
+    </p>
+
+    <div class="flex wrap" style="gap:8px;margin:14px 0">
+      <a class="btn p" href="${esc(url)}" target="_blank" rel="noopener">📄 Abrir informe</a>
+      <a class="btn" href="${wa}" target="_blank" rel="noopener">📲 WhatsApp</a>
+      <a class="btn" href="${correo}">✉ Correo</a>
+    </div>
+
+    <span class="lbl">Enlace</span>
+    <input type="text" id="infUrl" value="${esc(url)}" readonly style="font-size:12px">
+
+    <div id="infEnvios" class="mut" style="margin-top:16px">Consultando los envíos…</div>
+
+    <div class="flex" style="margin-top:14px">
+      <button class="btn" id="copiarInf">Copiar enlace</button>
+      ${esAdmin() || puedeEditar() ? '<button class="btn danger" id="anular">Anular enlace</button>' : ''}
+      <button class="btn right" data-cerrar>Cerrar</button>
+    </div>`,
+  async box => {
+    box.querySelector('#copiarInf').onclick = async () => {
+      try { await navigator.clipboard.writeText(url); toast('Enlace copiado'); }
+      catch (_) { box.querySelector('#infUrl').select(); toast('Selecciona y copia'); }
+    };
+
+    const anular = box.querySelector('#anular');
+    if (anular) anular.onclick = async () => {
+      if (!confirm('Quien tenga el enlace dejará de ver el informe. Al reenviar el proceso se genera uno nuevo. ¿Anular?')) return;
+      await api('/procesos/' + p.id + '/compartir', { method: 'DELETE' });
+      const d = await api('/procesos');
+      S.procesos = d.procesos;
+      if (S.draft && S.draft.id === p.id) S.draft.informeUrl = '';
+      cerrarModal(); render(); toast('Enlace anulado');
+    };
+
+    try {
+      const d = await api('/procesos/' + p.id + '/envios');
+      const caja = box.querySelector('#infEnvios');
+      caja.innerHTML = d.envios.length
+        ? `<span class="lbl">Envíos</span><table class="t"><tbody>${d.envios.map(e => `<tr>
+            <td><b>Envío #${e.numero}</b><div class="tiny">${esc(fechaLarga(e.creado))} · ${esc(e.por || '')}</div></td>
+            <td class="tiny" style="width:150px">${e.avance}% · 📷 ${e.fotos} · 🎙 ${e.audios}</td>
+          </tr>`).join('')}</tbody></table>`
+        : '<div class="mut">Sin envíos registrados.</div>';
+    } catch (_) {
+      box.querySelector('#infEnvios').innerHTML = '';
+    }
   });
 }

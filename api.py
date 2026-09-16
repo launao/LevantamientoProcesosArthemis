@@ -149,6 +149,10 @@ def _equipo():
     return filas
 
 
+def _url_informe(token):
+    return request.host_url.rstrip("/") + "/r/" + token if token else ""
+
+
 def _procesos(solo_de=None):
     """El admin ve todo. Los demás, únicamente lo que tienen a cargo."""
     if solo_de:
@@ -158,6 +162,8 @@ def _procesos(solo_de=None):
         ps = D.rows("SELECT * FROM procesos WHERE COALESCE(eliminado,0)=0 "
                     "ORDER BY codigo, nombre")
     evs = D.rows("SELECT * FROM evidencias ORDER BY creado")
+    tokens = {t["proceso_id"]: t["token"] for t in
+              D.rows("SELECT proceso_id, token FROM share_tokens WHERE activo")}
     por_proc = {}
     for e in evs:
         por_proc.setdefault(e["proceso_id"], []).append({
@@ -178,6 +184,7 @@ def _procesos(solo_de=None):
             "atiende": p.get("atiende") or "",
             "notasClinica": p.get("notas_clinica") or "",
             "propuestoPor": p.get("propuesto_por") or "",
+            "informeUrl": _url_informe(tokens.get(p["id"])),
             "enviadoEn": str(p.get("enviado_en") or ""),
             "enviadoPor": p.get("enviado_por") or "",
             "enviosTotal": p.get("envios_total") or 0,
