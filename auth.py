@@ -4,6 +4,8 @@ auth.py — Contraseñas, sesión y decoradores de acceso.
 Roles:
   admin     — todo, incluida la plantilla, el equipo y la configuración
   analista  — crea y edita procesos, sube evidencias
+  clinica   — contraparte de la institución: ve la agenda, designa a quién
+              atiende de su lado y consulta los informes
   lector    — solo lectura y exportación
 """
 import functools
@@ -16,8 +18,12 @@ from flask import session, jsonify, request
 
 import db as D
 
-ROLES = ("admin", "analista", "lector")
+ROLES = ("admin", "analista", "clinica", "lector")
 PUEDE_EDITAR = ("admin", "analista")
+
+# El rol "clinica" es para la gente de la institución: ve la agenda de lo
+# que se va a levantar, anota a quién van a mandar de su lado, y consulta
+# los informes terminados. No edita el contenido del levantamiento.
 
 _intentos = defaultdict(list)          # ip -> [timestamps]
 MAX_INTENTOS = 8

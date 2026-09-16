@@ -160,6 +160,7 @@ COLUMNAS_NUEVAS = [
     ("procesos", "fecha_limite", "TEXT"),
     ("procesos", "contacto", "TEXT"),
     ("procesos", "eliminado", "INTEGER DEFAULT 0"),
+    ("procesos", "atiende", "TEXT"),
 ]
 
 
@@ -190,6 +191,11 @@ def _c(cid, etiqueta, tipo, obligatorio=False, opciones=None, ayuda="",
             "ayuda": ayuda, "catalogo": catalogo,
             "pregunta": pregunta or etiqueta, "ejemplo": ejemplo}
 
+
+# Se sube este número cada vez que la plantilla base estrena campos. Sirve
+# para sembrarlos UNA sola vez en las instalaciones que ya existen: si
+# alguien borra un campo a propósito, no se lo devolvemos en cada arranque.
+PLANTILLA_BASE_VERSION = 2
 
 PLANTILLA_DEFAULT = {"secciones": [
     {"id": "s_id", "nombre": "1. Identificación", "campos": [
@@ -292,7 +298,15 @@ PLANTILLA_DEFAULT = {"secciones": [
         _c("f_cobertura", "Cobertura del sistema actual", "lista", False, catalogo="cat_cobertura",
            pregunta="(Para el analista) ¿Qué tanto cubre el sistema este proceso?"),
     ]},
-    {"id": "s_cie", "nombre": "8. Cierre", "campos": [
+    {"id": "s_con", "nombre": "8. Con qué otros procesos se conecta", "campos": [
+        _c("f_viene_de", "Procesos que vienen antes", "procesos",
+           pregunta="¿De qué otro proceso le llega el trabajo a usted?",
+           ayuda="Marque los procesos que ya están registrados. Si el que busca no aparece, todavía no lo ha levantado nadie."),
+        _c("f_va_hacia", "Procesos que siguen después", "procesos",
+           pregunta="Cuando usted termina, ¿a qué otro proceso pasa el caso?",
+           ayuda="Esto arma el mapa: sirve para ver si hay pedazos sueltos o duplicados."),
+    ]},
+    {"id": "s_cie", "nombre": "9. Cierre", "campos": [
         _c("f_valida", "Validado con", "persona",
            pregunta="¿Con quién del equipo se revisó y confirmó esta información?"),
         _c("f_obs", "Observaciones finales", "parrafo",
@@ -363,8 +377,9 @@ def init_db():
 
     fila = D.row("SELECT data, version FROM plantilla WHERE id=1")
     if not fila:
+        base = dict(PLANTILLA_DEFAULT, _base=PLANTILLA_BASE_VERSION)
         D.execute("INSERT INTO plantilla (id, data, version) VALUES (1, ?, 1)",
-                  (D.jdump(PLANTILLA_DEFAULT), ))
+                  (D.jdump(base), ))
     else:
         # Una plantilla de una versión anterior no trae la pregunta ni el
         # ejemplo. Se completan campo por campo, respetando cualquier texto
@@ -382,10 +397,35 @@ def init_db():
                         if valor:
                             c[clave] = valor
                             tocada = True
+        # Campos nuevos de la plantilla base. Solo se siembran si esta
+        # instalación todavía no vio esta versión.
+        sembrada = tpl.get("_base", 0)
+        ids_existentes = {c.get("id") for s in tpl.get("secciones", [])
+                          for c in s.get("campos", [])}
+        ids_secciones = {s.get("id") for s in tpl.get("secciones", [])}
+        for sec_base in (PLANTILLA_DEFAULT["secciones"]
+                         if sembrada < PLANTILLA_BASE_VERSION else []):
+            faltantes = [c for c in sec_base["campos"]
+                         if c["id"] not in ids_existentes]
+            if not faltantes:
+                continue
+            if sec_base["id"] in ids_secciones:
+                destino = next(s for s in tpl["secciones"] if s.get("id") == sec_base["id"])
+                destino.setdefault("campos", []).extend(faltantes)
+            else:
+                tpl.setdefault("secciones", []).append(
+                    {"id": sec_base["id"], "nombre": sec_base["nombre"], "campos": faltantes})
+            tocada = True
+            print(f"[schema] campos añadidos a la plantilla: "
+                  f"{', '.join(c['id'] for c in faltantes)}")
+
+        if sembrada < PLANTILLA_BASE_VERSION:
+            tpl["_base"] = PLANTILLA_BASE_VERSION
+            tocada = True
+
         if tocada:
             D.execute("UPDATE plantilla SET data=?, version=? WHERE id=1",
                       (D.jdump(tpl), (fila["version"] or 1) + 1))
-            print("[schema] plantilla completada con preguntas y ejemplos")
 
     if not D.row("SELECT id FROM usuarios LIMIT 1"):
         usuario = os.environ.get("ADMIN_USER", "admin")

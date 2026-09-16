@@ -38,13 +38,15 @@ const TIPOS_CAMPO = [
   { k: 'fecha', n: 'Fecha' },
   { k: 'si_no', n: 'Sí / No' },
   { k: 'pasos', n: 'Tabla de actividades' },
-  { k: 'persona', n: 'Persona del equipo' }
+  { k: 'persona', n: 'Persona del equipo' },
+  { k: 'procesos', n: 'Otros procesos (enlace)' }
 ];
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const esAdmin = () => S.yo && S.yo.rol === 'admin';
 const puedeEditar = () => S.yo && (S.yo.rol === 'admin' || S.yo.rol === 'analista');
+const esClinica = () => S.yo && S.yo.rol === 'clinica';
 
 /* ── Capa de API ──────────────────────────────────────────────── */
 async function api(ruta, opciones = {}) {
@@ -61,6 +63,43 @@ async function api(ruta, opciones = {}) {
   return d;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Direcciones
+
+   Cada vista y cada proceso tienen su propia URL. Así se abre un
+   proceso en otra pestaña con Cmd+clic, se guarda en favoritos, y el
+   botón Atrás del navegador hace lo que uno espera.
+   ═══════════════════════════════════════════════════════════════ */
+function leerRuta() {
+  const h = (location.hash || '').replace(/^#\/?/, '');
+  const [vista, id] = h.split('/');
+  return { vista: vista || '', id: id || '' };
+}
+
+function irA(vista, id, reemplazar) {
+  const destino = '#/' + vista + (id ? '/' + id : '');
+  if (location.hash === destino) return;
+  if (reemplazar) history.replaceState(null, '', destino);
+  else location.hash = destino;
+}
+
+function aplicarRuta() {
+  const { vista, id } = leerRuta();
+  if (!vista) { S.vista = 'tablero'; return render(); }
+
+  if (vista === 'proceso' && id) {
+    if (S.procId === id && S.vista === 'proceso') return;
+    const p = S.procesos.find(x => x.id === id);
+    if (p) return abrirProceso(id, true);
+    S.vista = 'procesos'; return render();
+  }
+  if (S.vista === vista && !S.procId) return;
+  S.vista = vista; S.procId = null; S.draft = null;
+  render();
+}
+
+window.addEventListener('hashchange', () => { if (S.listo) aplicarRuta(); });
+
 /* ── Arranque ─────────────────────────────────────────────────── */
 render();
 arrancar();
@@ -71,7 +110,9 @@ async function arrancar() {
     S.yo = d.usuario; S.config = d.config; S.plantilla = d.plantilla;
     if (Array.isArray(S.config.estados) && S.config.estados.length === 4) ESTADOS = S.config.estados;
     S.equipo = d.equipo; S.procesos = d.procesos;
-    S.listo = true; render();
+    api('/indice').then(x => { S.indice = x.procesos; }).catch(() => { S.indice = []; });
+    S.listo = true;
+    aplicarRuta();
     S.pollTimer = setInterval(refrescarSilencioso, 8000);
   } catch (e) {
     S.listo = true; render();
@@ -264,13 +305,20 @@ function render() {
       <div class="brand"><div class="dot"></div>
         <div><b>${esc(S.config.proyecto || 'Levantamiento')}</b><small>${esc(S.config.organizacion || 'Procesos')}</small></div></div>
       <nav class="nav">
+        ${esClinica() ? `
+          ${nav('agenda', '◷', 'Agenda', v)}
+          ${nav('procesos', '▤', 'Procesos', v)}
+          ${nav('mapa', '⤳', 'Mapa', v)}
+        ` : `
         ${nav('tablero', '◱', esAdmin() ? 'Tablero' : 'Mi avance', v)}
         ${nav('procesos', '▤', 'Procesos', v)}
+        ${esAdmin() ? nav('mapa', '⤳', 'Mapa', v) : ''}
         ${esAdmin() ? nav('asignacion', '⇄', 'Asignación', v) : ''}
         ${esAdmin() ? nav('equipo', '👥', 'Equipo', v) : ''}
         ${esAdmin() ? nav('plantilla', '⚙', 'Plantilla', v) : ''}
         ${esAdmin() ? nav('ajustes', '⋯', 'Ajustes', v) : ''}
         ${esAdmin() ? '' : nav('cuenta', '⋯', 'Mi cuenta', v)}
+        `}
       </nav>
       <div class="side-foot">
         <div style="font-weight:600;color:var(--ink-2)">${esc(S.yo.nombre)}</div>
@@ -281,7 +329,8 @@ function render() {
   </div>`;
 
   r.querySelectorAll('.nav button').forEach(b => b.onclick = () => {
-    S.vista = b.dataset.v; S.procId = null; S.draft = null; S.editandoPlantilla = false; render();
+    S.vista = b.dataset.v; S.procId = null; S.draft = null; S.editandoPlantilla = false;
+    irA(b.dataset.v); render();
   });
   document.getElementById('salir').onclick = async e => {
     e.preventDefault();
@@ -291,8 +340,12 @@ function render() {
 
   const m = document.getElementById('main');
   const rutas = { tablero: vistaTablero, procesos: vistaProcesos, proceso: vistaProceso,
-                  asignacion: vistaAsignacion, equipo: vistaEquipo,
-                  plantilla: vistaPlantilla, ajustes: vistaAjustes, cuenta: vistaAjustes };
+                  asignacion: vistaAsignacion, equipo: vistaEquipo, agenda: vistaAgenda,
+                  mapa: vistaMapa, plantilla: vistaPlantilla,
+                  ajustes: vistaAjustes, cuenta: vistaAjustes };
+  if (esClinica() && !['agenda', 'procesos', 'proceso', 'mapa'].includes(v)) {
+    S.vista = 'agenda'; return render();
+  }
   // Las pantallas de configuración son solo del administrador. Se comprueba
   // aquí además de ocultar el menú, por si alguien llega por otra vía.
   const soloAdmin = ['asignacion', 'equipo', 'plantilla'];
@@ -439,7 +492,9 @@ function vistaProcesos(m) {
     ${esAdmin() ? '<button class="btn sm" id="verPapelera">Archivados</button>' : ''}
     ${puedeEditar() ? '<button class="btn p" id="nuevoP">+ Nuevo proceso</button>' : ''}</div>
 
-  ${esAdmin() ? '' : '<div class="banner">Aquí ves los procesos que tienes a cargo.</div>'}
+  ${esAdmin() ? '' : esClinica()
+    ? '<div class="banner">Todos los procesos que el equipo está levantando en la clínica.</div>'
+    : '<div class="banner">Aquí ves los procesos que tienes a cargo.</div>'}
 
   <div class="card" style="margin-bottom:16px">
     <div class="grid ${esAdmin() ? 'g3' : 'g2'}" style="gap:10px">
@@ -484,7 +539,7 @@ function filaProceso(p) {
   const plazo = textoPlazo(p.fechaLimite);
   return `<tr data-id="${p.id}" style="cursor:pointer">
     <td class="mut" style="width:74px">${esc(p.codigo || '—')}</td>
-    <td><b>${esc(p.nombre)}</b>
+    <td><a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
       <div class="tiny">${esc(p.area || 'Sin área')}${p.contacto ? ' · contacto: ' + esc(p.contacto) : ''}</div></td>
     ${esAdmin() ? `<td class="mut" style="width:130px">${esc(nombrePersona(p.responsable))}</td>` : ''}
     <td style="width:120px">${plazo.html}</td>
@@ -578,8 +633,9 @@ function modalNuevoProceso() {
 }
 
 /* ── Editor de proceso ────────────────────────────────────────── */
-function abrirProceso(id) {
+function abrirProceso(id, desdeRuta) {
   const p = S.procesos.find(x => x.id === id); if (!p) return;
+  if (!desdeRuta) irA('proceso', id);
   S.draft = JSON.parse(JSON.stringify(p));
   S.draft.respuestas = S.draft.respuestas || {};
   S.draft.evidencias = S.draft.evidencias || [];
@@ -666,7 +722,7 @@ function vistaProceso(m) {
       const ok = await guardarAhora(true);
       if (!ok && !confirm('No se pudo guardar en el servidor. Los cambios quedaron respaldados en este equipo. ¿Salir de todos modos?')) return;
     }
-    S.vista = 'procesos'; S.procId = null; S.draft = null; render();
+    S.vista = 'procesos'; S.procId = null; S.draft = null; irA('procesos'); render();
   };
 
   pintarEstadoGuardado(S.dirty ? 'escribiendo' : 'guardado');
@@ -879,6 +935,17 @@ function campoHTML(c, v, grande) {
   }
   else if (c.tipo === 'si_no') ctrl = `<select id="${id}" data-campo="${c.id}" ${ro}><option value="">—</option><option value="si" ${v === 'si' ? 'selected' : ''}>Sí</option><option value="no" ${v === 'no' ? 'selected' : ''}>No</option></select>`;
   else if (c.tipo === 'persona') ctrl = `<select id="${id}" data-campo="${c.id}" ${ro}><option value="">—</option>${S.equipo.map(x => `<option value="${x.id}" ${v === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select>`;
+  else if (c.tipo === 'procesos') {
+    const sel = Array.isArray(v) ? v : [];
+    const otros = (S.indice || []).filter(x => !S.draft || x.id !== S.draft.id);
+    ctrl = otros.length
+      ? `<div class="enlaces" data-procesos="${c.id}">${otros.map(x =>
+          `<label class="chip ${sel.includes(x.id) ? 'marcado' : ''}" style="cursor:pointer">
+            <input type="checkbox" value="${x.id}" ${sel.includes(x.id) ? 'checked' : ''} ${ro} style="width:auto;margin:0">
+            ${esc(x.codigo ? x.codigo + ' · ' : '')}${esc(x.nombre)}
+            <span class="tiny">${esc(x.area || '')}</span></label>`).join('')}</div>`
+      : '<div class="mut">Todavía no hay otros procesos registrados con los que enlazar.</div>';
+  }
   else if (c.tipo === 'multi') {
     const sel = Array.isArray(v) ? v : [];
     const ops = opcionesDe(c);
@@ -1135,6 +1202,14 @@ function conectarCampos(cont) {
     };
     sel.onchange = () => { aplicar(); if (sel.value === '__otro__' && libre) libre.focus(); };
     if (libre) libre.oninput = aplicar;
+  });
+
+  cont.querySelectorAll('[data-procesos]').forEach(box => {
+    box.querySelectorAll('input[type=checkbox]').forEach(cb => cb.onchange = () => {
+      p.respuestas[box.dataset.procesos] = [...box.querySelectorAll('input:checked')].map(x => x.value);
+      cb.closest('.chip').classList.toggle('marcado', cb.checked);
+      refrescarAvance(); guardarDebounce();
+    });
   });
 
   cont.querySelectorAll('[data-otro-multi]').forEach(inp => {
@@ -2150,4 +2225,181 @@ function fechaLarga(iso) {
     return new Date(iso.replace(' ', 'T')).toLocaleString('es-CO',
       { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   } catch (_) { return iso; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Agenda — lo que ve la contraparte de la clínica
+
+   No le interesa el contenido del levantamiento sino la logística:
+   qué le van a preguntar, cuándo, y a quién tiene que mandar de su lado.
+   ═══════════════════════════════════════════════════════════════ */
+function vistaAgenda(m) {
+  const ps = S.procesos.filter(p => p.estado !== 'aprobado');
+  const conFecha = ps.filter(p => p.fechaLimite);
+  const clasificar = p => {
+    const d = textoPlazo(p.fechaLimite).dias;
+    if (d === null) return 'sin';
+    if (d < 0) return 'vencidos';
+    if (d === 0) return 'hoy';
+    if (d <= 7) return 'semana';
+    return 'despues';
+  };
+  const grupos = {
+    vencidos: { n: 'Pasados de fecha', ps: [] },
+    hoy: { n: 'Hoy', ps: [] },
+    semana: { n: 'Esta semana', ps: [] },
+    despues: { n: 'Más adelante', ps: [] },
+    sin: { n: 'Sin fecha todavía', ps: [] }
+  };
+  ps.forEach(p => grupos[clasificar(p)].ps.push(p));
+  Object.values(grupos).forEach(g => g.ps.sort((a, b) =>
+    (a.fechaLimite || '9999').localeCompare(b.fechaLimite || '9999')));
+
+  const sinAtender = conFecha.filter(p => !p.atiende).length;
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Agenda de levantamiento</h1><div class="sp"></div>
+    <span class="tiny">${ps.length} proceso(s) pendientes</span></div>
+
+  <div class="banner">
+    Aquí está lo que el equipo va a venir a preguntar. Para cada proceso, escriba
+    <b>quién de la clínica</b> los va a atender: es la persona que conoce ese trabajo
+    y que puede responder con detalle.
+    ${sinAtender ? `<br><b>Faltan ${sinAtender} por asignar de su lado.</b>` : ''}
+  </div>
+
+  ${Object.entries(grupos).filter(([, g]) => g.ps.length).map(([k, g]) => `
+    <section class="grupo">
+      <div class="grupo-cab">
+        <span class="pill ${k === 'vencidos' ? 'en_revision' : k === 'hoy' ? 'en_curso' : 'pendiente'}">${esc(g.n)}</span>
+        <span class="tiny">${g.ps.length}</span>
+      </div>
+      <div class="grid g2">
+        ${g.ps.map(p => tarjetaAgenda(p)).join('')}
+      </div>
+    </section>`).join('') ||
+    '<div class="empty"><span class="e">◷</span>No hay procesos programados por ahora.</div>'}`;
+
+  m.querySelectorAll('[data-atiende]').forEach(inp => {
+    let t = null;
+    inp.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        try {
+          await api('/procesos/' + inp.dataset.atiende + '/atiende',
+                    { method: 'PUT', body: { atiende: inp.value } });
+          const p = S.procesos.find(x => x.id === inp.dataset.atiende);
+          if (p) p.atiende = inp.value;
+          const eco = m.querySelector(`[data-eco="${inp.dataset.atiende}"]`);
+          if (eco) eco.textContent = inp.value ? 'Guardado' : '';
+        } catch (_) { toast('No se pudo guardar'); }
+      }, 600);
+    };
+  });
+}
+
+function tarjetaAgenda(p) {
+  const plazo = textoPlazo(p.fechaLimite);
+  const listo = p.estado === 'en_revision';
+  return `<div class="card agenda-card">
+    <div class="flex" style="align-items:flex-start;margin-bottom:8px">
+      <div style="flex:1">
+        <b>${esc(p.nombre)}</b>
+        <div class="tiny">${esc(p.codigo || '')} · ${esc(p.area || 'Sin área')}</div>
+      </div>
+      ${plazo.html}
+    </div>
+
+    <div class="tiny" style="margin-bottom:10px">
+      Lo levanta: <b>${esc(nombrePersona(p.responsable))}</b>
+      ${p.contacto ? `<br>Referencia dada: ${esc(p.contacto)}` : ''}
+    </div>
+
+    <label class="f" style="margin:0">
+      <span class="lbl">¿Quién atiende de la clínica?</span>
+      <input type="text" data-atiende="${p.id}" value="${esc(p.atiende || '')}"
+        placeholder="Nombre y cargo de quien va a responder">
+      <span class="tiny" data-eco="${p.id}"></span>
+    </label>
+
+    ${listo ? `<div style="margin-top:10px"><a class="btn sm" href="#/proceso/${p.id}">Ver lo levantado</a></div>` : ''}
+  </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Mapa de conexiones
+
+   Se arma solo con lo que cada quien declaró: de dónde le llega el
+   trabajo y a quién se lo pasa. A los quince días dice más que
+   cualquier informe: dónde hay huecos y qué quedó suelto.
+   ═══════════════════════════════════════════════════════════════ */
+async function vistaMapa(m) {
+  m.innerHTML = `<div class="topbar"><h1>Mapa de procesos</h1></div>
+    <div class="mut">Armando el mapa…</div>`;
+  let d;
+  try { d = await api('/mapa'); }
+  catch (_) { m.innerHTML = '<div class="empty">No se pudo cargar el mapa.</div>'; return; }
+
+  const { nodos, enlaces, sueltos } = d;
+  if (!nodos.length) {
+    m.innerHTML = `<div class="topbar"><h1>Mapa de procesos</h1></div>
+      <div class="empty"><span class="e">⤳</span>Todavía no hay procesos registrados.</div>`;
+    return;
+  }
+
+  // Se agrupa por área: es como la clínica piensa su propia operación.
+  const areas = [...new Set(nodos.map(n => n.area || 'Sin área'))];
+  const porId = Object.fromEntries(nodos.map(n => [n.id, n]));
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Mapa de procesos</h1><div class="sp"></div>
+    <span class="tiny">${nodos.length} procesos · ${enlaces.length} conexiones</span></div>
+
+  <div class="banner">
+    Este mapa se arma solo con lo que cada persona respondió en
+    “¿de qué proceso le llega el trabajo?” y “¿a quién se lo pasa?”.
+    ${sueltos.length ? `<b>Hay ${sueltos.length} proceso(s) sin ninguna conexión declarada</b>: o están aislados de verdad, o falta preguntarlo.` : 'Todos los procesos tienen al menos una conexión.'}
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>Cadenas encontradas</h3>
+    ${enlaces.length ? `<div class="cadenas">${enlaces.map(e => `
+      <div class="cadena">
+        <a href="#/proceso/${e.de}" class="nodo ${(porId[e.de] || {}).estado || ''}">
+          <b>${esc((porId[e.de] || {}).nombre || '?')}</b>
+          <span class="tiny">${esc((porId[e.de] || {}).area || '')}</span></a>
+        <span class="flecha">→</span>
+        <a href="#/proceso/${e.a}" class="nodo ${(porId[e.a] || {}).estado || ''}">
+          <b>${esc((porId[e.a] || {}).nombre || '?')}</b>
+          <span class="tiny">${esc((porId[e.a] || {}).area || '')}</span></a>
+      </div>`).join('')}</div>`
+      : '<div class="mut">Ninguna conexión declarada todavía. Aparecen a medida que el equipo responde la sección “Con qué otros procesos se conecta”.</div>'}
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>Por área</h3>
+    <div class="grid g3">
+      ${areas.map(a => {
+        const suyos = nodos.filter(n => (n.area || 'Sin área') === a);
+        const cruzados = enlaces.filter(e => {
+          const da = (porId[e.de] || {}).area || 'Sin área';
+          const aa = (porId[e.a] || {}).area || 'Sin área';
+          return (da === a || aa === a) && da !== aa;
+        }).length;
+        return `<div class="area-card">
+          <b>${esc(a)}</b>
+          <div class="tiny">${suyos.length} proceso(s) · ${cruzados} conexión(es) con otras áreas</div>
+          <div style="margin-top:8px">${suyos.map(n =>
+            `<a href="#/proceso/${n.id}" class="chip" style="margin:2px 3px 0 0;font-size:11.5px">${esc(n.nombre)}</a>`).join('')}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  ${sueltos.length ? `<div class="card">
+    <h3>Sin conexiones declaradas</h3>
+    <p class="mut" style="margin-top:-6px">Vale la pena preguntar por estos: es raro que un proceso no reciba ni entregue nada.</p>
+    <div class="flex wrap">${sueltos.map(id =>
+      `<a href="#/proceso/${id}" class="chip">${esc((porId[id] || {}).nombre || '?')}</a>`).join('')}</div>
+  </div>` : ''}`;
 }

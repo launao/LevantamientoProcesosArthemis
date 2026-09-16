@@ -118,9 +118,14 @@ def cambiar_password():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _alcance():
-    """None significa 'todos los procesos'; un id, solo los de esa persona."""
+    """None significa 'todos los procesos'; un id, solo los de esa persona.
+
+    El admin y la contraparte de la clínica ven todo: el primero porque
+    coordina, la segunda porque necesita saber qué le van a preguntar y
+    cuándo. Los analistas ven solo lo suyo.
+    """
     u = usuario_actual()
-    return None if u["rol"] == "admin" else u["id"]
+    return None if u["rol"] in ("admin", "clinica", "lector") else u["id"]
 
 
 @api.get("/bootstrap")
@@ -167,6 +172,7 @@ def _procesos(solo_de=None):
             "respuestas": D.jload(p["respuestas"], {}),
             "fechaLimite": str(p.get("fecha_limite") or ""),
             "contacto": p.get("contacto") or "",
+            "atiende": p.get("atiende") or "",
             "enviadoEn": str(p.get("enviado_en") or ""),
             "enviadoPor": p.get("enviado_por") or "",
             "enviosTotal": p.get("envios_total") or 0,
@@ -236,10 +242,16 @@ def guardar_plantilla():
     if not isinstance(secciones, list):
         return jsonify({"error": "formato_invalido"}), 400
 
-    fila = D.row("SELECT version FROM plantilla WHERE id=1")
+    fila = D.row("SELECT data, version FROM plantilla WHERE id=1")
     version = (fila["version"] or 1) + 1
+    # Se conservan las marcas internas (como _base, que recuerda qué campos
+    # base ya se sembraron); si no, al guardar se repondrían campos que el
+    # usuario acaba de borrar a propósito.
+    previa = D.jload(fila["data"], {})
+    nueva = {k: v for k, v in previa.items() if k.startswith("_")}
+    nueva["secciones"] = secciones
     D.execute("UPDATE plantilla SET data=?, version=? WHERE id=1",
-              (D.jdump({"secciones": secciones}), version))
+              (D.jdump(nueva), version))
     auditar("plantilla_actualizada", "plantilla", "1", f"v{version}")
     return jsonify({"ok": True, "version": version})
 
@@ -361,6 +373,72 @@ def crear_proceso():
          (d.get("contacto") or "").strip()))
     auditar("proceso_creado", "proceso", pid, nombre)
     return jsonify({"ok": True, "id": pid})
+
+
+@api.put("/procesos/<pid>/atiende")
+@login_required
+def designar_atiende(pid):
+    """La contraparte de la clínica anota quién va a atender de su lado."""
+    u = usuario_actual()
+    if u["rol"] not in ("admin", "clinica"):
+        return jsonify({"error": "sin_permiso"}), 403
+    if not D.row("SELECT id FROM procesos WHERE id=?", (pid,)):
+        return jsonify({"error": "no_existe"}), 404
+
+    d = request.get_json(silent=True) or {}
+    D.execute("UPDATE procesos SET atiende=? WHERE id=?",
+              ((d.get("atiende") or "").strip()[:200], pid))
+    auditar("atiende_designado", "proceso", pid, d.get("atiende"))
+    return jsonify({"ok": True})
+
+
+@api.get("/indice")
+@login_required
+def indice_procesos():
+    """Nombres de todos los procesos, sin su contenido.
+
+    Sirve para enlazar unos con otros: un analista necesita poder decir
+    'esto viene de Admisiones' aunque ese proceso sea de otra persona.
+    """
+    ps = D.rows("SELECT id, codigo, nombre, area, responsable_id, estado "
+                "FROM procesos WHERE COALESCE(eliminado,0)=0 ORDER BY codigo, nombre")
+    return jsonify({"procesos": [
+        {"id": p["id"], "codigo": p["codigo"], "nombre": p["nombre"],
+         "area": p["area"], "responsable": p["responsable_id"], "estado": p["estado"]}
+        for p in ps]})
+
+
+@api.get("/mapa")
+@login_required
+def mapa_conexiones():
+    """Qué proceso alimenta a cuál, según lo que cada quien declaró."""
+    ps = D.rows("SELECT id, codigo, nombre, area, estado, responsable_id, respuestas "
+                "FROM procesos WHERE COALESCE(eliminado,0)=0")
+    nodos, enlaces = [], []
+    por_id = {p["id"]: p for p in ps}
+
+    for p in ps:
+        r = D.jload(p["respuestas"], {})
+        nodos.append({"id": p["id"], "codigo": p["codigo"], "nombre": p["nombre"],
+                      "area": p["area"], "estado": p["estado"]})
+        for otro in (r.get("f_viene_de") or []):
+            if otro in por_id:
+                enlaces.append({"de": otro, "a": p["id"]})
+        for otro in (r.get("f_va_hacia") or []):
+            if otro in por_id:
+                enlaces.append({"de": p["id"], "a": otro})
+
+    # Un mismo enlace declarado por los dos lados cuenta una sola vez.
+    vistos, limpios = set(), []
+    for e in enlaces:
+        clave = (e["de"], e["a"])
+        if clave not in vistos:
+            vistos.add(clave)
+            limpios.append(e)
+
+    sueltos = [n["id"] for n in nodos
+               if not any(e["de"] == n["id"] or e["a"] == n["id"] for e in limpios)]
+    return jsonify({"nodos": nodos, "enlaces": limpios, "sueltos": sueltos})
 
 
 @api.put("/procesos/<pid>")
@@ -925,6 +1003,7 @@ def datos_informe(token):
     plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
     respuestas = D.jload(p["respuestas"], {})
     nombres = {u["id"]: u["nombre"] for u in D.rows("SELECT id, nombre FROM usuarios")}
+    enlaces = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM procesos")}
 
     evs = D.rows("SELECT * FROM evidencias WHERE proceso_id=? ORDER BY creado", (t["proceso_id"],))
     por_campo = {}
@@ -955,7 +1034,7 @@ def datos_informe(token):
                 continue
             campos.append({
                 "etiqueta": c["etiqueta"], "tipo": c["tipo"],
-                "valor": v, "nombres": nombres, "evidencias": ev,
+                "valor": v, "nombres": nombres, "enlaces": enlaces, "evidencias": ev,
                 "porPaso": por_paso.get(c["id"], {}),
             })
         if campos:
@@ -1055,6 +1134,8 @@ def _valor_texto(campo, v, nombres):
         return ", ".join(v)
     if t == "persona":
         return nombres.get(v, "")
+    if t == "procesos" and isinstance(v, list):
+        return ", ".join(nombres.get(x, x) for x in v)
     return a_texto_plano(str(v))
 
 
@@ -1064,7 +1145,8 @@ def export_csv():
     plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
     campos = _campos_planos(plantilla)
     nombres = {u["id"]: u["nombre"] for u in _equipo()}
-    procs = _procesos()
+    nombres.update({p["id"]: p["nombre"] for p in D.rows("SELECT id, nombre FROM procesos")})
+    procs = _procesos(_alcance())
 
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_ALL)

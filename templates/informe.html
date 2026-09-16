@@ -132,6 +132,8 @@
               {% endif %}{% endfor %}
               </tbody>
             </table>
+          {% elif c.tipo == 'procesos' and c.valor %}
+            <div class="txt">{% for pid in c.valor %}{{ c.enlaces.get(pid, pid) }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
           {% elif c.tipo == 'multi' and c.valor %}
             <div class="txt">{{ c.valor | join(' · ') }}</div>
           {% elif c.tipo == 'persona' and c.valor %}
