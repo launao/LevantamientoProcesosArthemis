@@ -416,6 +416,13 @@ function tableroAdmin(m) {
   <div class="topbar"><h1>Tablero</h1><div class="sp"></div>
     <button class="btn p" id="nuevoTab">+ Nuevo proceso</button></div>
 
+  ${diasSobrecargados().length ? `<div class="alerta-carga" style="margin-bottom:16px">
+    <b>⚠ ${diasSobrecargados().length} día(s) con más de ${topeDia()} levantamientos</b>
+    <div class="tiny" style="margin-top:4px">
+      ${diasSobrecargados().slice(0, 4).map(d => `${esc(fechaCorta(d.fecha))}: ${d.total}`).join(' · ')}
+      — revísalo en <a href="#/asignacion">Asignación</a>.
+    </div></div>` : ''}
+
   ${vencidos.length ? `<div class="banner" style="margin-bottom:16px">
     <b>${vencidos.length} proceso(s) pasados de fecha:</b>
     ${vencidos.slice(0, 5).map(p => `${esc(p.nombre)} — ${esc(nombrePersona(p.responsable))}`).join(' · ')}
@@ -1750,6 +1757,10 @@ function vistaAjustes(m) {
       <h3>Proyecto</h3>
       <label class="f"><span class="lbl">Nombre del proyecto</span><input type="text" id="aProy" value="${esc(S.config.proyecto || '')}"></label>
       <label class="f"><span class="lbl">Organización</span><input type="text" id="aOrg" value="${esc(S.config.organizacion || '')}"></label>
+      <label class="f"><span class="lbl">Máximo de levantamientos por día</span>
+        <span class="hint">Pasado este número, la app avisa que el día está sobrecargado.</span>
+        <input type="number" id="aMax" min="1" max="20" value="${esc(S.config.maxPorDia || 3)}"></label>
+
       <label class="f"><span class="lbl">Áreas (una por línea)</span><textarea id="aAreas" style="min-height:150px">${esc((S.config.areas || []).join('\n'))}</textarea></label>
 
       <h3 style="margin-top:22px">Estados del flujo</h3>
@@ -1816,6 +1827,7 @@ function vistaAjustes(m) {
         proyecto: document.getElementById('aProy').value.trim(),
         organizacion: document.getElementById('aOrg').value.trim(),
         areas: document.getElementById('aAreas').value.split('\n').map(x => x.trim()).filter(Boolean),
+        maxPorDia: parseInt(document.getElementById('aMax').value, 10) || 3,
         estados: [...document.querySelectorAll('[data-estado]')].map(i => ({ k: i.dataset.estado, n: i.value.trim() })),
         catalogos: leerCatalogos()
       }});
@@ -2021,80 +2033,301 @@ function modalCompartir(p, d) {
 /* ═══════════════════════════════════════════════════════════════
    Asignación: cada persona por separado
    ═══════════════════════════════════════════════════════════════ */
-function vistaAsignacion(m) {
-  const sinAsignar = S.procesos.filter(p => !p.responsable);
-  const activos = S.equipo.filter(u => u.rol !== 'lector');
+/* ═══════════════════════════════════════════════════════════════
+   Asignación — cuatro maneras de mirar lo mismo
 
-  const tarjeta = (pe) => {
-    const mios = S.procesos.filter(p => p.responsable === pe.id);
-    const av = mios.length ? Math.round(mios.reduce((t, p) => t + avance(p), 0) / mios.length) : 0;
-    const enviados = mios.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
-    return `<div class="card" style="margin-bottom:14px">
-      <div class="flex" style="margin-bottom:12px">
-        <div style="width:34px;height:34px;border-radius:99px;background:var(--surface-2);
-          display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--accent)">
-          ${esc((pe.nombre || '?').trim()[0].toUpperCase())}</div>
-        <div>
-          <div style="font-weight:600">${esc(pe.nombre)}</div>
-          <div class="tiny">${esc(pe.rol)} · ${mios.length} asignado(s) · ${enviados} enviado(s)</div>
-        </div>
-        <div class="right" style="text-align:right;min-width:110px">
-          <div class="bar"><i style="width:${av}%"></i></div>
-          <span class="tiny">${av}% promedio</span>
-        </div>
-      </div>
-      ${mios.length ? `<div class="tw"><table class="t">
-        <tbody>${mios.map(p => `<tr>
-          <td style="width:70px" class="mut">${esc(p.codigo || '—')}</td>
-          <td><a href="#" data-abrir="${p.id}">${esc(p.nombre)}</a>
-            <div class="tiny">${esc(p.area || '')}</div></td>
-          <td style="width:96px"><span class="pill ${p.estado}">${(ESTADOS.find(e => e.k === p.estado) || ESTADOS[0]).n}</span></td>
-          <td style="width:110px"><div class="bar"><i style="width:${avance(p)}%"></i></div></td>
-          ${esAdmin() ? `<td style="width:34px"><button class="btn sm ic" data-quitar="${p.id}" title="Quitar asignación">×</button></td>` : ''}
-        </tr>`).join('')}</tbody></table></div>`
-        : '<div class="mut" style="padding:6px 0">Sin procesos asignados.</div>'}
-      ${esAdmin() && sinAsignar.length ? `<div class="flex" style="margin-top:12px;gap:8px">
-        <select data-sel="${pe.id}" style="flex:1">
-          <option value="">Asignar un proceso pendiente…</option>
-          ${sinAsignar.map(p => `<option value="${p.id}">${esc(p.codigo || '')} ${esc(p.nombre)}</option>`).join('')}
-        </select>
-        <button class="btn sm" data-asig="${pe.id}">Asignar</button>
-      </div>` : ''}
-    </div>`;
-  };
+   Tabla para editar rápido, tablero para repartir arrastrando,
+   calendario para ver la carga por día, cronograma para ver el mes
+   completo por persona. Cada una responde una pregunta distinta.
+   ═══════════════════════════════════════════════════════════════ */
+function vistaAsignacion(m) {
+  S.vistaAsig = S.vistaAsig || 'tabla';
+  const sobrecarga = diasSobrecargados();
 
   m.innerHTML = `
   <div class="topbar"><h1>Asignación</h1><div class="sp"></div>
-    <span class="tiny">${sinAsignar.length} sin responsable</span></div>
-  ${esAdmin() ? '' : '<div class="banner">Solo el administrador reparte los procesos. Aquí puedes ver cómo va el equipo.</div>'}
-
-  ${sinAsignar.length ? `<div class="card" style="margin-bottom:18px;border-color:color-mix(in srgb,var(--warn) 40%,transparent)">
-    <h3>Sin responsable (${sinAsignar.length})</h3>
-    <div class="flex wrap" style="gap:7px">
-      ${sinAsignar.map(p => `<span class="chip">${esc(p.codigo || '')} ${esc(p.nombre)}</span>`).join('')}
+    <div class="tabs">
+      ${[['tabla', '▤ Tabla'], ['tablero', '▦ Tablero'],
+         ['calendario', '▩ Calendario'], ['cronograma', '▭ Cronograma']].map(([k, n]) =>
+        `<button class="tab ${S.vistaAsig === k ? 'on' : ''}" data-vista="${k}">${n}</button>`).join('')}
     </div>
-    <div class="tiny" style="margin-top:10px">Asígnalos desde la tarjeta de cada persona.</div>
+  </div>
+
+  ${esAdmin() ? '' : '<div class="banner">Solo el administrador reparte los procesos.</div>'}
+  ${sobrecarga.length ? `<div class="alerta-carga">
+    <b>⚠ Días con demasiados levantamientos</b>
+    <div class="tiny" style="margin:4px 0 8px">
+      Más de ${topeDia()} en un mismo día. La cuarta entrevista del día nunca sale como la primera.
+    </div>
+    ${sobrecarga.map(d => `<div class="carga-linea">
+      <b>${esc(fechaCorta(d.fecha))}</b>
+      <span class="pill en_revision">${d.total} levantamientos</span>
+      <span class="tiny">${d.detalle.map(x => esc(nombrePersona(x))).join(' · ')}</span>
+    </div>`).join('')}
   </div>` : ''}
 
-  <div class="grid g2" style="align-items:start">
-    <div>${activos.filter((_, i) => i % 2 === 0).map(tarjeta).join('')}</div>
-    <div>${activos.filter((_, i) => i % 2 === 1).map(tarjeta).join('')}</div>
-  </div>
-  ${activos.length ? '' : '<div class="empty"><span class="e">👥</span>Agrega personas en Equipo para poder asignar.</div>'}`;
+  <div id="asigCuerpo"></div>`;
 
-  m.querySelectorAll('[data-abrir]').forEach(a => a.onclick = e => {
-    e.preventDefault(); abrirProceso(a.dataset.abrir);
+  m.querySelectorAll('[data-vista]').forEach(b => b.onclick = () => {
+    S.vistaAsig = b.dataset.vista; vistaAsignacion(m);
   });
-  m.querySelectorAll('[data-asig]').forEach(b => b.onclick = async () => {
-    const sel = m.querySelector(`[data-sel="${b.dataset.asig}"]`);
-    if (!sel.value) { toast('Elige un proceso'); return; }
-    await asignar(sel.value, b.dataset.asig);
+
+  const cuerpo = document.getElementById('asigCuerpo');
+  ({ tabla: asigTabla, tablero: asigTablero,
+     calendario: asigCalendario, cronograma: asigCronograma }[S.vistaAsig])(cuerpo, m);
+}
+
+function topeDia() {
+  return (S.config && S.config.maxPorDia) || 3;
+}
+
+/** Días donde se juntaron más levantamientos de los razonables. */
+function diasSobrecargados() {
+  const porDia = {};
+  S.procesos.filter(p => p.fechaLimite && p.estado !== 'aprobado').forEach(p => {
+    const f = p.fechaLimite.slice(0, 10);
+    (porDia[f] = porDia[f] || []).push(p.responsable || '');
+  });
+  return Object.entries(porDia)
+    .filter(([, lista]) => lista.length > topeDia())
+    .map(([fecha, lista]) => ({ fecha, total: lista.length, detalle: lista }))
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+function cargaDelDia(fecha) {
+  return S.procesos.filter(p => p.fechaLimite &&
+    p.fechaLimite.slice(0, 10) === fecha && p.estado !== 'aprobado').length;
+}
+
+function fechaCorta(iso) {
+  try {
+    return new Date(iso + 'T00:00:00').toLocaleDateString('es-CO',
+      { weekday: 'long', day: 'numeric', month: 'long' });
+  } catch (_) { return iso; }
+}
+
+/* ── Tabla ────────────────────────────────────────────────────── */
+function asigTabla(cuerpo, m) {
+  const ps = [...S.procesos].sort((a, b) =>
+    (a.fechaLimite || '9999').localeCompare(b.fechaLimite || '9999'));
+
+  cuerpo.innerHTML = `<div class="card" style="padding:0"><div class="tw"><table class="t">
+    <thead><tr>
+      <th style="width:70px">Código</th><th>Proceso</th><th style="width:150px">Área</th>
+      <th style="width:190px">Responsable</th><th style="width:160px">Entrega</th>
+      <th style="width:110px">Estado</th><th style="width:110px">Avance</th>
+    </tr></thead>
+    <tbody>${ps.map(p => {
+      const carga = p.fechaLimite ? cargaDelDia(p.fechaLimite.slice(0, 10)) : 0;
+      return `<tr>
+        <td class="mut">${esc(p.codigo || '—')}</td>
+        <td><a class="nombre-proc" href="#/proceso/${p.id}">${esc(p.nombre)}</a>
+          ${p.propuestoPor && !p.responsable ? '<span class="etiqueta-prop">propuesto</span>' : ''}</td>
+        <td class="mut">${esc(p.area || '—')}</td>
+        <td>${esAdmin()
+          ? `<select data-asig="${p.id}" class="mini">
+              <option value="">— Sin asignar —</option>
+              ${S.equipo.filter(u => u.rol !== 'lector' && u.rol !== 'clinica').map(u =>
+                `<option value="${u.id}" ${p.responsable === u.id ? 'selected' : ''}>${esc(u.nombre)}</option>`).join('')}
+             </select>`
+          : esc(nombrePersona(p.responsable))}</td>
+        <td>${esAdmin()
+          ? `<input type="date" data-fecha="${p.id}" class="mini" value="${esc((p.fechaLimite || '').slice(0, 10))}">
+             ${carga > topeDia() ? `<span class="tiny alerta">${carga} ese día</span>` : ''}`
+          : textoPlazo(p.fechaLimite).html}</td>
+        <td><span class="pill ${p.estado}">${esc(etiquetaEstado(p.estado))}</span></td>
+        <td><div class="bar"><i style="width:${avance(p)}%"></i></div></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="7"><div class="empty">No hay procesos.</div></td></tr>'}
+    </tbody></table></div></div>`;
+
+  conectarEdicionAsig(cuerpo, m);
+}
+
+function conectarEdicionAsig(cuerpo, m) {
+  if (!esAdmin()) return;
+  cuerpo.querySelectorAll('[data-asig]').forEach(sel => sel.onchange = async () => {
+    await asignar(sel.dataset.asig, sel.value || null);
     vistaAsignacion(m);
   });
-  m.querySelectorAll('[data-quitar]').forEach(b => b.onclick = async () => {
-    await asignar(b.dataset.quitar, null);
+  cuerpo.querySelectorAll('[data-fecha]').forEach(inp => inp.onchange = async () => {
+    await ponerFecha(inp.dataset.fecha, inp.value || null);
     vistaAsignacion(m);
   });
+}
+
+/* ── Tablero: se reparte arrastrando ──────────────────────────── */
+function asigTablero(cuerpo, m) {
+  const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
+  const columnas = [{ id: '', nombre: 'Sin asignar', rol: '' }].concat(gente);
+
+  cuerpo.innerHTML = `
+    ${esAdmin() ? '<div class="tiny" style="margin-bottom:10px">Arrastra una tarjeta de una columna a otra para reasignarla.</div>' : ''}
+    <div class="tablero">
+      ${columnas.map(col => {
+        const suyos = S.procesos.filter(p => (p.responsable || '') === col.id);
+        const av = suyos.length ? Math.round(suyos.reduce((t, p) => t + avance(p), 0) / suyos.length) : 0;
+        return `<div class="col" data-col="${col.id}">
+          <div class="col-cab">
+            <b>${esc(col.nombre)}</b>
+            <span class="tiny">${suyos.length}${suyos.length ? ` · ${av}%` : ''}</span>
+          </div>
+          <div class="col-cuerpo" data-drop="${col.id}">
+            ${suyos.sort((a, b) => (a.fechaLimite || '9999').localeCompare(b.fechaLimite || '9999'))
+              .map(p => tarjetaTablero(p)).join('')
+              || '<div class="col-vacia">Nada aquí</div>'}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  if (!esAdmin()) return;
+
+  cuerpo.querySelectorAll('.tarjeta').forEach(t => {
+    t.draggable = true;
+    t.ondragstart = e => {
+      e.dataTransfer.setData('text/plain', t.dataset.id);
+      t.classList.add('arrastrando');
+    };
+    t.ondragend = () => t.classList.remove('arrastrando');
+  });
+
+  cuerpo.querySelectorAll('[data-drop]').forEach(z => {
+    z.ondragover = e => { e.preventDefault(); z.classList.add('encima'); };
+    z.ondragleave = () => z.classList.remove('encima');
+    z.ondrop = async e => {
+      e.preventDefault();
+      z.classList.remove('encima');
+      const id = e.dataTransfer.getData('text/plain');
+      await asignar(id, z.dataset.drop || null);
+      vistaAsignacion(m);
+    };
+  });
+}
+
+function tarjetaTablero(p) {
+  const plazo = textoPlazo(p.fechaLimite);
+  const carga = p.fechaLimite ? cargaDelDia(p.fechaLimite.slice(0, 10)) : 0;
+  return `<div class="tarjeta" data-id="${p.id}">
+    <a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
+    <div class="tiny">${esc(p.area || 'Sin área')}</div>
+    <div class="flex" style="margin-top:6px;gap:6px">
+      ${plazo.html}
+      ${carga > topeDia() ? `<span class="tiny alerta">⚠ ${carga}</span>` : ''}
+    </div>
+    <div class="bar" style="margin-top:6px"><i style="width:${avance(p)}%"></i></div>
+  </div>`;
+}
+
+/* ── Calendario: dónde se acumula el trabajo ──────────────────── */
+function asigCalendario(cuerpo, m) {
+  S.mesAsig = S.mesAsig || new Date().toISOString().slice(0, 7);
+  const [anio, mes] = S.mesAsig.split('-').map(Number);
+  const primero = new Date(anio, mes - 1, 1);
+  const dias = new Date(anio, mes, 0).getDate();
+  const desfase = (primero.getDay() + 6) % 7;        // la semana arranca en lunes
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  const celdas = [];
+  for (let i = 0; i < desfase; i++) celdas.push('<div class="dia fuera"></div>');
+  for (let d = 1; d <= dias; d++) {
+    const iso = `${anio}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const delDia = S.procesos.filter(p => (p.fechaLimite || '').slice(0, 10) === iso);
+    const activos = delDia.filter(p => p.estado !== 'aprobado').length;
+    celdas.push(`<div class="dia ${iso === hoy ? 'hoy' : ''} ${activos > topeDia() ? 'lleno' : ''}">
+      <div class="dia-num">${d}${activos > topeDia() ? ' <span class="alerta">⚠</span>' : ''}</div>
+      ${delDia.map(p => `<a class="ev-dia" href="#/proceso/${p.id}" title="${esc(p.nombre)} — ${esc(nombrePersona(p.responsable))}">
+        <span class="punto ${p.estado}"></span>${esc(recortar(p.nombre, 16))}</a>`).join('')}
+    </div>`);
+  }
+
+  cuerpo.innerHTML = `
+    <div class="card" style="padding:14px">
+      <div class="flex" style="margin-bottom:12px">
+        <button class="btn sm ic" id="mesAntes">←</button>
+        <b style="min-width:180px;text-align:center">${esc(nombreMes(anio, mes))}</b>
+        <button class="btn sm ic" id="mesDespues">→</button>
+        <span class="right tiny">Tope: ${topeDia()} levantamientos por día</span>
+      </div>
+      <div class="cal-cab">${['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+        .map(d => `<div>${d}</div>`).join('')}</div>
+      <div class="calendario">${celdas.join('')}</div>
+    </div>`;
+
+  document.getElementById('mesAntes').onclick = () => { S.mesAsig = mover(S.mesAsig, -1); vistaAsignacion(m); };
+  document.getElementById('mesDespues').onclick = () => { S.mesAsig = mover(S.mesAsig, 1); vistaAsignacion(m); };
+}
+
+function mover(ym, n) {
+  const [a, m2] = ym.split('-').map(Number);
+  const d = new Date(a, m2 - 1 + n, 1);
+  return d.toISOString().slice(0, 7);
+}
+
+function nombreMes(a, m2) {
+  return new Date(a, m2 - 1, 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+}
+
+/* ── Cronograma: un mes por persona, de un vistazo ────────────── */
+function asigCronograma(cuerpo, m) {
+  const DIAS = 35;
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const fechas = [...Array(DIAS)].map((_, i) => {
+    const d = new Date(hoy); d.setDate(d.getDate() + i - 3);   // tres días atrás, para ver lo vencido
+    return d.toISOString().slice(0, 10);
+  });
+
+  const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
+  const filas = gente.concat([{ id: '', nombre: 'Sin asignar' }]);
+
+  cuerpo.innerHTML = `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="crono-scroll">
+        <table class="crono">
+          <thead><tr><th class="fija">Persona</th>
+            ${fechas.map(f => {
+              const d = new Date(f + 'T00:00:00');
+              const finde = [0, 6].includes(d.getDay());
+              const carga = cargaDelDia(f);
+              return `<th class="${finde ? 'finde' : ''} ${carga > topeDia() ? 'lleno' : ''}"
+                title="${esc(fechaCorta(f))}${carga ? ' — ' + carga + ' levantamiento(s)' : ''}">
+                <span class="dsem">${['D', 'L', 'M', 'X', 'J', 'V', 'S'][d.getDay()]}</span>
+                <span class="dnum">${d.getDate()}</span></th>`;
+            }).join('')}
+          </tr></thead>
+          <tbody>
+            ${filas.map(u => {
+              const suyos = S.procesos.filter(p => (p.responsable || '') === u.id && p.fechaLimite);
+              return `<tr>
+                <td class="fija"><b>${esc(u.nombre)}</b>
+                  <div class="tiny">${S.procesos.filter(p => (p.responsable || '') === u.id).length} proceso(s)</div></td>
+                ${fechas.map(f => {
+                  const enEseDia = suyos.filter(p => p.fechaLimite.slice(0, 10) === f);
+                  if (!enEseDia.length) return '<td></td>';
+                  return `<td class="${enEseDia.length > topeDia() ? 'lleno' : ''}">
+                    ${enEseDia.map(p => `<a class="hito ${p.estado}" href="#/proceso/${p.id}"
+                      title="${esc(p.nombre)}">${esc(recortar(p.nombre, 3))}</a>`).join('')}</td>`;
+                }).join('')}
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="tiny" style="margin-top:10px">
+      Cada cuadrito es un levantamiento en su fecha de entrega. Las columnas en rojo
+      tienen más de ${topeDia()} en el mismo día.
+    </div>`;
+}
+
+async function ponerFecha(procesoId, fecha) {
+  try {
+    await api('/procesos/' + procesoId, { method: 'PUT', body: { fechaLimite: fecha } });
+    const p = S.procesos.find(x => x.id === procesoId);
+    if (p) p.fechaLimite = fecha || '';
+    const carga = fecha ? cargaDelDia(fecha) : 0;
+    if (carga > topeDia()) toast(`Atención: ya van ${carga} levantamientos ese día`);
+  } catch (_) { toast('No se pudo cambiar la fecha'); }
 }
 
 async function asignar(procesoId, personaId) {

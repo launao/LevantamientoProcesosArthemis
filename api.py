@@ -205,6 +205,12 @@ def guardar_config():
         "areas": [a.strip() for a in (d.get("areas") or actual.get("areas") or []) if a.strip()],
     })
 
+    try:
+        tope = int(d.get("maxPorDia", actual.get("maxPorDia", 3)))
+        actual["maxPorDia"] = max(1, min(20, tope))
+    except (TypeError, ValueError):
+        pass
+
     # Etiquetas de los estados. Las claves son fijas (el flujo depende de
     # ellas); lo que se puede cambiar es cómo se llaman en pantalla.
     if isinstance(d.get("estados"), list):
