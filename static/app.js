@@ -700,8 +700,12 @@ function vistaProceso(m) {
       <label class="f" style="margin:0"><span class="lbl">Estado</span><select id="pEstado" ${ro ? 'disabled' : ''}>${ESTADOS.map(e => `<option value="${e.k}" ${p.estado === e.k ? 'selected' : ''}>${e.n}</option>`).join('')}</select></label>
     </div>
     <div class="grid g2" style="gap:10px;margin-top:10px">
-      <label class="f" style="margin:0"><span class="lbl">Fecha de entrega${esAdmin() ? '' : ' <span class="tiny">(la fija el admin)</span>'}</span>
-        <input type="date" id="pFecha" value="${esc((p.fechaLimite || '').slice(0, 10))}" ${ro || !esAdmin() ? 'disabled' : ''}></label>
+      ${esAdmin()
+        ? `<label class="f" style="margin:0"><span class="lbl">Fecha de entrega</span>
+            <input type="date" id="pFecha" value="${esc((p.fechaLimite || '').slice(0, 10))}"></label>`
+        : `<div class="f" style="margin:0"><span class="lbl">Fecha de entrega</span>
+            <div class="dato-fijo">${p.fechaLimite ? textoPlazo(p.fechaLimite).html + ` <span class="tiny">(${esc(p.fechaLimite.slice(0, 10))})</span>` : '<span class="tiny">Todavía sin fecha</span>'}
+              <div class="tiny" style="margin-top:3px">La define la coordinación del levantamiento.</div></div></div>`}
       <label class="f" style="margin:0"><span class="lbl">¿Con quién hablar en la clínica?</span>
         <input type="text" id="pContacto" value="${esc(p.contacto || '')}" placeholder="Nombre y cargo de quien conoce el proceso" ${ro ? 'disabled' : ''}></label>
     </div>
@@ -938,13 +942,29 @@ function campoHTML(c, v, grande) {
   else if (c.tipo === 'procesos') {
     const sel = Array.isArray(v) ? v : [];
     const otros = (S.indice || []).filter(x => !S.draft || x.id !== S.draft.id);
+    const porArea = {};
+    otros.forEach(x => { (porArea[x.area || 'Sin área'] = porArea[x.area || 'Sin área'] || []).push(x); });
+
     ctrl = otros.length
-      ? `<div class="enlaces" data-procesos="${c.id}">${otros.map(x =>
-          `<label class="chip ${sel.includes(x.id) ? 'marcado' : ''}" style="cursor:pointer">
-            <input type="checkbox" value="${x.id}" ${sel.includes(x.id) ? 'checked' : ''} ${ro} style="width:auto;margin:0">
-            ${esc(x.codigo ? x.codigo + ' · ' : '')}${esc(x.nombre)}
-            <span class="tiny">${esc(x.area || '')}</span></label>`).join('')}</div>`
-      : '<div class="mut">Todavía no hay otros procesos registrados con los que enlazar.</div>';
+      ? `<div class="enlaces-caja">
+          <div class="enlaces" data-procesos="${c.id}">
+            ${Object.entries(porArea).map(([a, lista]) => `
+              <div class="enlace-area">
+                <div class="tiny enlace-area-nom">${esc(a)}</div>
+                ${lista.map(x => `<label class="chip ${sel.includes(x.id) ? 'marcado' : ''}" style="cursor:pointer">
+                  <input type="checkbox" value="${x.id}" ${sel.includes(x.id) ? 'checked' : ''} ${ro} style="width:auto;margin:0">
+                  ${esc(x.nombre)}</label>`).join('')}
+              </div>`).join('')}
+          </div>
+          <div class="tiny enlaces-nota">
+            ¿No aparece el que le mencionaron? Es normal: significa que todavía nadie lo ha
+            levantado. No marque nada — quedó escrito en la pregunta anterior y se enlaza solo
+            cuando ese proceso exista.
+          </div>
+        </div>`
+      : `<div class="enlaces-caja"><div class="mut">Este es el primer proceso registrado, así que
+          todavía no hay con qué enlazarlo. Se enlaza solo más adelante, cuando el equipo levante
+          los que van antes y después.</div></div>`;
   }
   else if (c.tipo === 'multi') {
     const sel = Array.isArray(v) ? v : [];

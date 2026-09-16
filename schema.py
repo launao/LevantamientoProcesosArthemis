@@ -195,7 +195,7 @@ def _c(cid, etiqueta, tipo, obligatorio=False, opciones=None, ayuda="",
 # Se sube este número cada vez que la plantilla base estrena campos. Sirve
 # para sembrarlos UNA sola vez en las instalaciones que ya existen: si
 # alguien borra un campo a propósito, no se lo devolvemos en cada arranque.
-PLANTILLA_BASE_VERSION = 2
+PLANTILLA_BASE_VERSION = 3
 
 PLANTILLA_DEFAULT = {"secciones": [
     {"id": "s_id", "nombre": "1. Identificación", "campos": [
@@ -298,13 +298,21 @@ PLANTILLA_DEFAULT = {"secciones": [
         _c("f_cobertura", "Cobertura del sistema actual", "lista", False, catalogo="cat_cobertura",
            pregunta="(Para el analista) ¿Qué tanto cubre el sistema este proceso?"),
     ]},
-    {"id": "s_con", "nombre": "8. Con qué otros procesos se conecta", "campos": [
+    {"id": "s_con", "nombre": "8. Qué pasa antes y qué sigue después", "campos": [
+        _c("f_antes_texto", "Qué pasa antes", "parrafo",
+           pregunta="Antes de que usted haga esto, ¿qué tuvo que pasar? ¿Quién se lo entrega?",
+           ayuda="Dígalo con sus palabras, no importa el nombre técnico. Vale “me lo pasa la niña de la entrada” o “llega el correo de la EPS”.",
+           ejemplo="La chica del call center ya agendó la cita el día anterior, y el paciente llega con el turno del kiosco."),
         _c("f_viene_de", "Procesos que vienen antes", "procesos",
-           pregunta="¿De qué otro proceso le llega el trabajo a usted?",
-           ayuda="Marque los procesos que ya están registrados. Si el que busca no aparece, todavía no lo ha levantado nadie."),
+           pregunta="De lo que acaba de contar, ¿alguno de estos procesos es el que le entrega el trabajo?",
+           ayuda="PARA QUIEN ENTREVISTA: marque solo si el proceso ya está levantado en la lista. Si el que menciona no aparece, no marque nada: quedó escrito arriba y lo enlazamos cuando alguien lo levante."),
+        _c("f_despues_texto", "Qué sigue después", "parrafo", True,
+           pregunta="Cuando usted termina, ¿qué pasa con el paciente o con el caso? ¿A quién le queda el turno?",
+           ayuda="La pregunta clave. Si responde “ya, nada más”, valga la pena repreguntar: ¿y el papel dónde queda? ¿alguien lo revisa después?",
+           ejemplo="Le entrego la historia a la enfermera de optometría y el paciente pasa a la sala de espera. La copia física va a facturación al final del día."),
         _c("f_va_hacia", "Procesos que siguen después", "procesos",
-           pregunta="Cuando usted termina, ¿a qué otro proceso pasa el caso?",
-           ayuda="Esto arma el mapa: sirve para ver si hay pedazos sueltos o duplicados."),
+           pregunta="De lo que sigue, ¿alguno de estos procesos es el que recibe?",
+           ayuda="PARA QUIEN ENTREVISTA: esto arma el mapa de la clínica. Si lo que sigue todavía no está levantado, déjelo escrito arriba y avísele a la coordinación: es un proceso que falta."),
     ]},
     {"id": "s_cie", "nombre": "9. Cierre", "campos": [
         _c("f_valida", "Validado con", "persona",
@@ -353,6 +361,34 @@ CONFIG_DEFAULT = {
 # Init
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Campos cuya redacción se mejoró después de haberse sembrado. Se reescriben
+# solo si el texto guardado es exactamente el que puso el sistema antes: si
+# alguien lo editó, se respeta lo suyo.
+RETOQUES = {
+    "f_viene_de": {
+        "antes": "¿De qué otro proceso le llega el trabajo a usted?",
+        "etiqueta": "Procesos que vienen antes",
+        "pregunta": "De lo que acaba de contar, ¿alguno de estos procesos es el que le entrega el trabajo?",
+        "ayuda": "PARA QUIEN ENTREVISTA: marque solo si el proceso ya está levantado en la lista. Si el que menciona no aparece, no marque nada: quedó escrito arriba y lo enlazamos cuando alguien lo levante.",
+    },
+    "f_va_hacia": {
+        "antes": "Cuando usted termina, ¿a qué otro proceso pasa el caso?",
+        "etiqueta": "Procesos que siguen después",
+        "pregunta": "De lo que sigue, ¿alguno de estos procesos es el que recibe?",
+        "ayuda": "PARA QUIEN ENTREVISTA: esto arma el mapa de la clínica. Si lo que sigue todavía no está levantado, déjelo escrito arriba y avísele a la coordinación: es un proceso que falta.",
+    },
+}
+
+# En algunas secciones el orden importa: primero se deja hablar a la persona
+# y solo después se le muestran las casillas. Si los campos llegaron en otro
+# orden por venir de una versión anterior, se reacomodan al de la base.
+SECCIONES_ORDENADAS = ("s_con",)
+
+SECCIONES_RENOMBRADAS = {
+    "s_con": ("8. Con qué otros procesos se conecta", "8. Qué pasa antes y qué sigue después"),
+}
+
+
 def init_db():
     with D.conn_ctx() as con:
         cur = con.cursor()
@@ -397,6 +433,19 @@ def init_db():
                         if valor:
                             c[clave] = valor
                             tocada = True
+        for sec in tpl.get("secciones", []):
+            viejo_nombre, nuevo_nombre = SECCIONES_RENOMBRADAS.get(sec.get("id"), (None, None))
+            if viejo_nombre and sec.get("nombre") == viejo_nombre:
+                sec["nombre"] = nuevo_nombre
+                tocada = True
+            for c in sec.get("campos", []):
+                r = RETOQUES.get(c.get("id"))
+                if r and c.get("pregunta") == r["antes"]:
+                    c["pregunta"] = r["pregunta"]
+                    c["ayuda"] = r["ayuda"]
+                    c["etiqueta"] = r["etiqueta"]
+                    tocada = True
+
         # Campos nuevos de la plantilla base. Solo se siembran si esta
         # instalación todavía no vio esta versión.
         sembrada = tpl.get("_base", 0)
@@ -418,6 +467,17 @@ def init_db():
             tocada = True
             print(f"[schema] campos añadidos a la plantilla: "
                   f"{', '.join(c['id'] for c in faltantes)}")
+
+        for sec_id in SECCIONES_ORDENADAS:
+            sec = next((x for x in tpl.get("secciones", []) if x.get("id") == sec_id), None)
+            base = next((x for x in PLANTILLA_DEFAULT["secciones"] if x["id"] == sec_id), None)
+            if not sec or not base:
+                continue
+            orden = [c["id"] for c in base["campos"]]
+            actual = [c.get("id") for c in sec.get("campos", [])]
+            if set(actual) == set(orden) and actual != orden:
+                sec["campos"].sort(key=lambda c: orden.index(c.get("id")))
+                tocada = True
 
         if sembrada < PLANTILLA_BASE_VERSION:
             tpl["_base"] = PLANTILLA_BASE_VERSION

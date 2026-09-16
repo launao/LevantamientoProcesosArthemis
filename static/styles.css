@@ -356,3 +356,16 @@ a.chip:hover{border-color:var(--accent);color:var(--accent)}
 .formatos .btn{flex-direction:column;align-items:flex-start;gap:3px;text-align:left;padding:12px 14px;height:100%}
 .formatos .btn .tiny{font-weight:400;line-height:1.45;white-space:normal}
 @media (max-width:620px){.formatos{grid-template-columns:1fr}}
+
+/* ── Dato que solo el admin edita ─────────────── */
+.dato-fijo{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:9px 11px}
+
+/* ── Enlaces entre procesos ───────────────────── */
+.enlaces-caja{border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;background:var(--surface)}
+.enlaces{display:flex;flex-direction:column;gap:12px}
+.enlace-area-nom{text-transform:uppercase;letter-spacing:.7px;font-weight:700;color:var(--accent);margin-bottom:5px}
+.enlace-area{display:flex;flex-wrap:wrap;gap:6px}
+.enlace-area .enlace-area-nom{flex:1 1 100%}
+.enlaces .chip{padding:7px 12px}
+.enlaces-nota{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);line-height:1.55}
