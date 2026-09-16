@@ -312,7 +312,7 @@ function render() {
         ` : `
         ${nav('tablero', '◱', esAdmin() ? 'Tablero' : 'Mi avance', v)}
         ${nav('procesos', '▤', 'Procesos', v)}
-        ${esAdmin() ? nav('mapa', '⤳', 'Mapa', v) : ''}
+        ${nav('mapa', '⤳', 'Mapa', v)}
         ${esAdmin() ? nav('asignacion', '⇄', 'Asignación', v) : ''}
         ${esAdmin() ? nav('equipo', '👥', 'Equipo', v) : ''}
         ${esAdmin() ? nav('plantilla', '⚙', 'Plantilla', v) : ''}
@@ -2335,11 +2335,12 @@ function tarjetaAgenda(p) {
    ═══════════════════════════════════════════════════════════════ */
 async function vistaMapa(m) {
   m.innerHTML = `<div class="topbar"><h1>Mapa de procesos</h1></div>
-    <div class="mut">Armando el mapa…</div>`;
+    <div class="mut">Armando el diagrama…</div>`;
   let d;
   try { d = await api('/mapa'); }
   catch (_) { m.innerHTML = '<div class="empty">No se pudo cargar el mapa.</div>'; return; }
 
+  S.mapa = d;
   const { nodos, enlaces, sueltos } = d;
   if (!nodos.length) {
     m.innerHTML = `<div class="topbar"><h1>Mapa de procesos</h1></div>
@@ -2347,59 +2348,329 @@ async function vistaMapa(m) {
     return;
   }
 
-  // Se agrupa por área: es como la clínica piensa su propia operación.
-  const areas = [...new Set(nodos.map(n => n.area || 'Sin área'))];
-  const porId = Object.fromEntries(nodos.map(n => [n.id, n]));
-
   m.innerHTML = `
   <div class="topbar"><h1>Mapa de procesos</h1><div class="sp"></div>
-    <span class="tiny">${nodos.length} procesos · ${enlaces.length} conexiones</span></div>
+    <span class="tiny">${nodos.length} procesos · ${enlaces.length} conexiones</span>
+    <button class="btn sm" id="expMapa">⤓ Descargar diagrama</button></div>
 
   <div class="banner">
-    Este mapa se arma solo con lo que cada persona respondió en
+    El diagrama se arma solo con lo que cada persona respondió en
     “¿de qué proceso le llega el trabajo?” y “¿a quién se lo pasa?”.
-    ${sueltos.length ? `<b>Hay ${sueltos.length} proceso(s) sin ninguna conexión declarada</b>: o están aislados de verdad, o falta preguntarlo.` : 'Todos los procesos tienen al menos una conexión.'}
+    ${sueltos.length
+      ? `<b>${sueltos.length} proceso(s) sin ninguna conexión declarada</b> aparecen aparte, al final: o están aislados de verdad, o falta preguntarlo.`
+      : 'Todos los procesos están conectados con al menos otro.'}
   </div>
 
-  <div class="card" style="margin-bottom:16px">
-    <h3>Cadenas encontradas</h3>
-    ${enlaces.length ? `<div class="cadenas">${enlaces.map(e => `
-      <div class="cadena">
-        <a href="#/proceso/${e.de}" class="nodo ${(porId[e.de] || {}).estado || ''}">
-          <b>${esc((porId[e.de] || {}).nombre || '?')}</b>
-          <span class="tiny">${esc((porId[e.de] || {}).area || '')}</span></a>
-        <span class="flecha">→</span>
-        <a href="#/proceso/${e.a}" class="nodo ${(porId[e.a] || {}).estado || ''}">
-          <b>${esc((porId[e.a] || {}).nombre || '?')}</b>
-          <span class="tiny">${esc((porId[e.a] || {}).area || '')}</span></a>
-      </div>`).join('')}</div>`
-      : '<div class="mut">Ninguna conexión declarada todavía. Aparecen a medida que el equipo responde la sección “Con qué otros procesos se conecta”.</div>'}
-  </div>
-
-  <div class="card" style="margin-bottom:16px">
-    <h3>Por área</h3>
-    <div class="grid g3">
-      ${areas.map(a => {
-        const suyos = nodos.filter(n => (n.area || 'Sin área') === a);
-        const cruzados = enlaces.filter(e => {
-          const da = (porId[e.de] || {}).area || 'Sin área';
-          const aa = (porId[e.a] || {}).area || 'Sin área';
-          return (da === a || aa === a) && da !== aa;
-        }).length;
-        return `<div class="area-card">
-          <b>${esc(a)}</b>
-          <div class="tiny">${suyos.length} proceso(s) · ${cruzados} conexión(es) con otras áreas</div>
-          <div style="margin-top:8px">${suyos.map(n =>
-            `<a href="#/proceso/${n.id}" class="chip" style="margin:2px 3px 0 0;font-size:11.5px">${esc(n.nombre)}</a>`).join('')}</div>
-        </div>`;
-      }).join('')}
+  <div class="card" style="padding:0;overflow:hidden">
+    <div class="mapa-barra">
+      <span class="tiny">Toca una caja para abrir el proceso</span>
+      <span class="right flex" style="gap:6px">
+        <button class="btn sm ic" id="zMenos" title="Alejar">−</button>
+        <button class="btn sm ic" id="zMas" title="Acercar">+</button>
+        <button class="btn sm" id="zAjustar">Ajustar</button>
+      </span>
     </div>
+    <div class="mapa-lienzo" id="lienzo"></div>
   </div>
 
-  ${sueltos.length ? `<div class="card">
-    <h3>Sin conexiones declaradas</h3>
-    <p class="mut" style="margin-top:-6px">Vale la pena preguntar por estos: es raro que un proceso no reciba ni entregue nada.</p>
-    <div class="flex wrap">${sueltos.map(id =>
-      `<a href="#/proceso/${id}" class="chip">${esc((porId[id] || {}).nombre || '?')}</a>`).join('')}</div>
-  </div>` : ''}`;
+  <div class="card" style="margin-top:16px">
+    <h3>Cruces entre áreas</h3>
+    <p class="mut" style="margin-top:-6px">Donde un proceso de un área entrega a otra suele estar el reproceso.</p>
+    <div class="tw"><table class="t"><tbody>${cruces(nodos, enlaces).map(c => `<tr>
+      <td><b>${esc(c.de)}</b></td><td style="width:30px;color:var(--accent)">→</td>
+      <td><b>${esc(c.a)}</b></td><td style="width:90px" class="tiny">${c.n} conexión(es)</td>
+    </tr>`).join('') || '<tr><td class="mut">Ninguno todavía.</td></tr>'}</tbody></table></div>
+  </div>`;
+
+  dibujarMapa(d);
+  document.getElementById('expMapa').onclick = () => modalExportarMapa(d);
+  document.getElementById('zMas').onclick = () => zoomMapa(1.2);
+  document.getElementById('zMenos').onclick = () => zoomMapa(1 / 1.2);
+  document.getElementById('zAjustar').onclick = () => { S.mapaZoom = 1; zoomMapa(1); };
+}
+
+function cruces(nodos, enlaces) {
+  const area = id => (nodos.find(n => n.id === id) || {}).area || 'Sin área';
+  const cuenta = {};
+  enlaces.forEach(e => {
+    const a = area(e.de), b = area(e.a);
+    if (a === b) return;
+    const k = a + '→' + b;
+    cuenta[k] = (cuenta[k] || 0) + 1;
+  });
+  return Object.entries(cuenta)
+    .map(([k, n]) => ({ de: k.split('→')[0], a: k.split('→')[1], n }))
+    .sort((x, y) => y.n - x.n);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Dibujo del flujo
+
+   Se ordena por capas: primero los procesos que no reciben de nadie,
+   después los que dependen de ellos, y así. Es la forma natural de leer
+   una cadena de trabajo, de izquierda a derecha.
+   ═══════════════════════════════════════════════════════════════ */
+function capas(nodos, enlaces) {
+  const entra = {}, sale = {};
+  nodos.forEach(n => { entra[n.id] = []; sale[n.id] = []; });
+  enlaces.forEach(e => {
+    if (sale[e.de]) sale[e.de].push(e.a);
+    if (entra[e.a]) entra[e.a].push(e.de);
+  });
+
+  const nivel = {};
+  nodos.forEach(n => { nivel[n.id] = 0; });
+
+  // Empuja cada nodo a la derecha de quienes lo alimentan. El tope de
+  // vueltas evita quedarse dando círculos si alguien declaró un ciclo.
+  for (let vuelta = 0; vuelta < nodos.length + 2; vuelta++) {
+    let cambio = false;
+    enlaces.forEach(e => {
+      if (nivel[e.a] <= nivel[e.de]) { nivel[e.a] = nivel[e.de] + 1; cambio = true; }
+    });
+    if (!cambio) break;
+  }
+  return { nivel, entra, sale };
+}
+
+function dibujarMapa(d) {
+  const lienzo = document.getElementById('lienzo');
+  if (!lienzo) return;
+
+  const conectados = d.nodos.filter(n => !d.sueltos.includes(n.id));
+  const sueltos = d.nodos.filter(n => d.sueltos.includes(n.id));
+  const { nivel } = capas(conectados, d.enlaces);
+
+  const ANCHO = 190, ALTO = 66, SEP_X = 90, SEP_Y = 26;
+  const columnas = {};
+  conectados.forEach(n => {
+    const c = nivel[n.id] || 0;
+    (columnas[c] = columnas[c] || []).push(n);
+  });
+
+  // Dentro de cada columna, juntos los de la misma área.
+  Object.values(columnas).forEach(col =>
+    col.sort((a, b) => (a.area || '').localeCompare(b.area || '')));
+
+  const pos = {};
+  let maxFilas = 0;
+  Object.entries(columnas).forEach(([c, col]) => {
+    maxFilas = Math.max(maxFilas, col.length);
+    col.forEach((n, i) => {
+      pos[n.id] = { x: +c * (ANCHO + SEP_X) + 30, y: i * (ALTO + SEP_Y) + 30 };
+    });
+  });
+
+  const nCols = Object.keys(columnas).length || 1;
+  const W = nCols * (ANCHO + SEP_X) + 60;
+  const filasSueltos = sueltos.length ? Math.ceil(sueltos.length / Math.max(1, Math.floor(W / (ANCHO + SEP_X)))) : 0;
+  const H = Math.max(maxFilas * (ALTO + SEP_Y) + 60, 220) + filasSueltos * (ALTO + SEP_Y) + (sueltos.length ? 70 : 0);
+
+  const colorArea = a => {
+    const areas = [...new Set(d.nodos.map(x => x.area || 'Sin área'))];
+    const tonos = ['#5998B3', '#2E9E6B', '#D9862B', '#8E6FB5', '#C7503F', '#4E8AA6', '#7A9E3F'];
+    return tonos[areas.indexOf(a || 'Sin área') % tonos.length];
+  };
+
+  const caja = (n, p) => `
+    <a class="nodo-g" href="#/proceso/${n.id}" transform="translate(${p.x},${p.y})">
+      <rect width="${ANCHO}" height="${ALTO}" rx="10"
+        fill="var(--surface)" stroke="${colorArea(n.area)}" stroke-width="2"></rect>
+      <rect width="5" height="${ALTO}" rx="2" fill="${colorArea(n.area)}"></rect>
+      <text x="16" y="25" class="n-nom">${esc(recortar(n.nombre, 24))}</text>
+      <text x="16" y="43" class="n-area">${esc(n.area || 'Sin área')}</text>
+      <text x="16" y="58" class="n-cod">${esc(n.codigo || '')}${n.estado === 'en_revision' ? ' · enviado' : ''}</text>
+    </a>`;
+
+  const flecha = e => {
+    const a = pos[e.de], b = pos[e.a];
+    if (!a || !b) return '';
+    const x1 = a.x + ANCHO, y1 = a.y + ALTO / 2;
+    const x2 = b.x, y2 = b.y + ALTO / 2;
+    const dx = Math.max(40, (x2 - x1) / 2);
+    return `<path d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"
+      fill="none" stroke="var(--ink-3)" stroke-width="1.8" marker-end="url(#punta)" opacity=".75"></path>`;
+  };
+
+  const anchoFila = Math.max(1, Math.floor((W - 60) / (ANCHO + SEP_X)));
+  const yBase = Math.max(maxFilas * (ALTO + SEP_Y) + 60, 220);
+
+  lienzo.innerHTML = `
+  <svg id="svgMapa" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="punta" viewBox="0 0 10 10" refX="9" refY="5"
+        markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-3)"></path>
+      </marker>
+    </defs>
+    <style>
+      .n-nom{font:600 13px var(--font);fill:var(--ink)}
+      .n-area{font:400 11px var(--font);fill:var(--ink-2)}
+      .n-cod{font:400 10px var(--font);fill:var(--ink-3)}
+      .nodo-g{cursor:pointer}
+      .nodo-g:hover rect:first-child{stroke-width:3}
+    </style>
+    ${d.enlaces.map(flecha).join('')}
+    ${conectados.map(n => caja(n, pos[n.id])).join('')}
+    ${sueltos.length ? `<text x="30" y="${yBase + 10}" class="n-area">Sin conexiones declaradas</text>` : ''}
+    ${sueltos.map((n, i) => caja(n, {
+      x: (i % anchoFila) * (ANCHO + SEP_X) + 30,
+      y: yBase + 30 + Math.floor(i / anchoFila) * (ALTO + SEP_Y)
+    })).join('')}
+  </svg>`;
+
+  S.mapaZoom = 1;
+}
+
+function recortar(t, n) {
+  t = String(t || '');
+  return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
+
+function zoomMapa(factor) {
+  const svg = document.getElementById('svgMapa');
+  if (!svg) return;
+  S.mapaZoom = Math.min(2.5, Math.max(0.35, (S.mapaZoom || 1) * factor));
+  const base = svg.getAttribute('viewBox').split(' ');
+  svg.setAttribute('width', (+base[2] * S.mapaZoom).toFixed(0));
+  svg.setAttribute('height', (+base[3] * S.mapaZoom).toFixed(0));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Bajar el diagrama a otro programa
+
+   Nadie quiere quedarse encerrado en esta app: el mapa sale en los
+   formatos que abren las herramientas de diagramación habituales.
+   ═══════════════════════════════════════════════════════════════ */
+function modalExportarMapa(d) {
+  modal(`<h3>Descargar el diagrama</h3>
+    <p class="mut" style="margin-top:-6px">Elige según dónde lo vayas a abrir.</p>
+    <div class="formatos">
+      <button class="btn" data-fmt="drawio"><b>draw.io / diagrams.net</b>
+        <span class="tiny">Cajas y flechas editables. Es el más cómodo para retocar.</span></button>
+      <button class="btn" data-fmt="mermaid"><b>Mermaid</b>
+        <span class="tiny">Texto. Sirve en Notion, Obsidian, GitHub y documentación.</span></button>
+      <button class="btn" data-fmt="dot"><b>Graphviz (.dot)</b>
+        <span class="tiny">Para generar el diagrama por línea de comandos.</span></button>
+      <button class="btn" data-fmt="csv"><b>CSV de conexiones</b>
+        <span class="tiny">Origen y destino en dos columnas. Para Excel o Power BI.</span></button>
+      <button class="btn" data-fmt="svg"><b>Imagen SVG</b>
+        <span class="tiny">El diagrama tal como se ve aquí.</span></button>
+      <button class="btn" data-fmt="json"><b>JSON</b>
+        <span class="tiny">Los datos crudos, para otro programa.</span></button>
+    </div>
+    <div class="flex" style="margin-top:16px"><button class="btn right" data-cerrar>Cerrar</button></div>`,
+  box => {
+    box.querySelectorAll('[data-fmt]').forEach(b => b.onclick = () => {
+      const f = b.dataset.fmt;
+      const gen = { drawio: aDrawio, mermaid: aMermaid, dot: aDot, csv: aCsvMapa, json: aJsonMapa };
+      if (f === 'svg') return bajarTexto('mapa-procesos.svg', svgLimpio(), 'image/svg+xml');
+      const { texto, nombre, tipo } = gen[f](d);
+      bajarTexto(nombre, texto, tipo);
+    });
+  });
+}
+
+function idLimpio(n, i) { return 'p' + i; }
+
+function aMermaid(d) {
+  const idx = {}; d.nodos.forEach((n, i) => { idx[n.id] = idLimpio(n, i); });
+  const areas = [...new Set(d.nodos.map(n => n.area || 'Sin área'))];
+  const lineas = ['flowchart LR'];
+  areas.forEach((a, k) => {
+    lineas.push(`  subgraph A${k}["${a}"]`);
+    d.nodos.filter(n => (n.area || 'Sin área') === a)
+      .forEach(n => lineas.push(`    ${idx[n.id]}["${(n.codigo ? n.codigo + ' ' : '') + n.nombre.replace(/"/g, "'")}"]`));
+    lineas.push('  end');
+  });
+  d.enlaces.forEach(e => lineas.push(`  ${idx[e.de]} --> ${idx[e.a]}`));
+  return { texto: lineas.join('\n'), nombre: 'mapa-procesos.mmd', tipo: 'text/plain' };
+}
+
+function aDot(d) {
+  const idx = {}; d.nodos.forEach((n, i) => { idx[n.id] = idLimpio(n, i); });
+  const l = ['digraph procesos {', '  rankdir=LR;',
+             '  node [shape=box style=rounded fontname="Helvetica" fontsize=11];'];
+  d.nodos.forEach(n => l.push(
+    `  ${idx[n.id]} [label="${(n.codigo ? n.codigo + '\\n' : '') + n.nombre.replace(/"/g, "'")}\\n(${n.area || 'Sin área'})"];`));
+  d.enlaces.forEach(e => l.push(`  ${idx[e.de]} -> ${idx[e.a]};`));
+  l.push('}');
+  return { texto: l.join('\n'), nombre: 'mapa-procesos.dot', tipo: 'text/plain' };
+}
+
+function aCsvMapa(d) {
+  const n = id => (d.nodos.find(x => x.id === id) || {});
+  const filas = [['Proceso origen', 'Área origen', 'Proceso destino', 'Área destino']];
+  d.enlaces.forEach(e => filas.push([
+    n(e.de).nombre || '', n(e.de).area || '', n(e.a).nombre || '', n(e.a).area || '']));
+  d.sueltos.forEach(id => filas.push([n(id).nombre || '', n(id).area || '', '(sin conexión)', '']));
+  const csv = '\ufeff' + filas.map(f => f.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(';')).join('\n');
+  return { texto: csv, nombre: 'conexiones.csv', tipo: 'text/csv' };
+}
+
+function aJsonMapa(d) {
+  return { texto: JSON.stringify(d, null, 2), nombre: 'mapa-procesos.json', tipo: 'application/json' };
+}
+
+/** XML de draw.io: se abre con Archivo → Abrir, y queda editable. */
+function aDrawio(d) {
+  const ANCHO = 180, ALTO = 60, SEP_X = 120, SEP_Y = 40;
+  const conectados = d.nodos.filter(n => !d.sueltos.includes(n.id));
+  const { nivel } = capas(conectados, d.enlaces);
+  const cols = {};
+  conectados.forEach(n => { const c = nivel[n.id] || 0; (cols[c] = cols[c] || []).push(n); });
+
+  const pos = {};
+  Object.entries(cols).forEach(([c, col]) => col.forEach((n, i) => {
+    pos[n.id] = { x: +c * (ANCHO + SEP_X) + 40, y: i * (ALTO + SEP_Y) + 40 };
+  }));
+  let yLibre = Math.max(...Object.values(cols).map(c => c.length), 1) * (ALTO + SEP_Y) + 120;
+  d.sueltos.forEach((id, i) => { pos[id] = { x: (i % 5) * (ANCHO + SEP_X) + 40, y: yLibre }; });
+
+  const esc2 = t => String(t || '').replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+
+  const celdas = d.nodos.map((n, i) => {
+    const p = pos[n.id] || { x: 40, y: yLibre + 120 };
+    const etiqueta = `${esc2((n.codigo ? n.codigo + ' — ' : '') + n.nombre)}&#10;${esc2(n.area || '')}`;
+    return `<mxCell id="n${i}" value="${etiqueta}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAF7;strokeColor=#112236;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+      <mxGeometry x="${p.x}" y="${p.y}" width="${ANCHO}" height="${ALTO}" as="geometry"/></mxCell>`;
+  });
+
+  const idx = {}; d.nodos.forEach((n, i) => { idx[n.id] = 'n' + i; });
+  const aristas = d.enlaces.map((e, i) =>
+    `<mxCell id="e${i}" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;" edge="1" parent="1" source="${idx[e.de]}" target="${idx[e.a]}"><mxGeometry relative="1" as="geometry"/></mxCell>`);
+
+  const xml = `<mxfile host="levantamiento"><diagram name="Mapa de procesos">
+  <mxGraphModel dx="1100" dy="800" grid="1" gridSize="10" guides="1" tooltips="1"
+    connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+    <root>
+      <mxCell id="0"/><mxCell id="1" parent="0"/>
+      ${celdas.join('\n      ')}
+      ${aristas.join('\n      ')}
+    </root>
+  </mxGraphModel></diagram></mxfile>`;
+  return { texto: xml, nombre: 'mapa-procesos.drawio', tipo: 'application/xml' };
+}
+
+/** El SVG con los colores resueltos: fuera de la app no existen las variables. */
+function svgLimpio() {
+  const svg = document.getElementById('svgMapa');
+  if (!svg) return '';
+  const c = getComputedStyle(document.body);
+  let t = svg.outerHTML;
+  ['--surface', '--ink', '--ink-2', '--ink-3', '--font'].forEach(v => {
+    t = t.split(`var(${v})`).join(c.getPropertyValue(v).trim() || '#333');
+  });
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' + t;
+}
+
+function bajarTexto(nombre, texto, tipo) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([texto], { type: tipo + ';charset=utf-8' }));
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast('Descargado: ' + nombre);
 }
