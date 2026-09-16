@@ -13,6 +13,8 @@ import time
 import uuid
 from collections import defaultdict
 
+from datetime import datetime
+
 import bcrypt
 from flask import session, jsonify, request
 
@@ -26,6 +28,8 @@ PUEDE_EDITAR = ("admin", "analista")
 # los informes terminados. No edita el contenido del levantamiento.
 
 _intentos = defaultdict(list)          # ip -> [timestamps]
+_visto = {}                            # uid -> última vez que se anotó
+INTERVALO_PRESENCIA = 45               # segundos entre anotaciones
 MAX_INTENTOS = 8
 VENTANA = 300                          # 5 minutos
 
@@ -74,7 +78,27 @@ def usuario_actual():
     u = D.row(
         "SELECT id, usuario, nombre, rol, contacto FROM usuarios "
         "WHERE id=? AND activo", (uid,))
+    if u:
+        _anotar_presencia(uid)
     return u
+
+
+def _anotar_presencia(uid):
+    """Deja constancia de que esta persona sigue ahí.
+
+    La app consulta al servidor cada pocos segundos, así que escribir en
+    cada petición sería desperdiciar la base. Se anota como mucho una vez
+    cada tres cuartos de minuto.
+    """
+    ahora = time.time()
+    if ahora - _visto.get(uid, 0) < INTERVALO_PRESENCIA:
+        return
+    _visto[uid] = ahora
+    try:
+        D.execute("UPDATE usuarios SET ultimo_visto=? WHERE id=?",
+                  (datetime.utcnow().isoformat(timespec="seconds"), uid))
+    except Exception:
+        pass
 
 
 def iniciar_sesion(u):

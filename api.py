@@ -141,9 +141,12 @@ def bootstrap():
 
 
 def _equipo():
-    return D.rows(
-        "SELECT id, usuario, nombre, rol, contacto FROM usuarios "
+    filas = D.rows(
+        "SELECT id, usuario, nombre, rol, contacto, ultimo_visto FROM usuarios "
         "WHERE activo ORDER BY nombre")
+    for f in filas:
+        f["ultimoVisto"] = str(f.pop("ultimo_visto") or "")
+    return filas
 
 
 def _procesos(solo_de=None):
@@ -204,12 +207,6 @@ def guardar_config():
         "organizacion": (d.get("organizacion") or "").strip(),
         "areas": [a.strip() for a in (d.get("areas") or actual.get("areas") or []) if a.strip()],
     })
-
-    try:
-        tope = int(d.get("maxPorDia", actual.get("maxPorDia", 3)))
-        actual["maxPorDia"] = max(1, min(20, tope))
-    except (TypeError, ValueError):
-        pass
 
     # Etiquetas de los estados. Las claves son fijas (el flujo depende de
     # ellas); lo que se puede cambiar es cómo se llaman en pantalla.

@@ -163,6 +163,7 @@ COLUMNAS_NUEVAS = [
     ("procesos", "atiende", "TEXT"),
     ("procesos", "notas_clinica", "TEXT"),
     ("procesos", "propuesto_por", "TEXT"),
+    ("usuarios", "ultimo_visto", "TEXT"),
 ]
 
 
@@ -332,10 +333,6 @@ CONFIG_DEFAULT = {
     "areas": ["Admisiones", "Call center", "Caja", "Tesorería", "Facturación",
               "Optometría", "Oftalmología", "Dilatación", "Enfermería",
               "Cirugía", "Calidad", "TI"],
-    # Cuántos levantamientos se consideran razonables en un mismo día.
-    # Pasado ese número, la app avisa: una persona no rinde igual en la
-    # cuarta entrevista del día que en la primera.
-    "maxPorDia": 3,
     "estados": [
         {"k": "pendiente", "n": "Borrador"},
         {"k": "en_curso", "n": "En curso"},
