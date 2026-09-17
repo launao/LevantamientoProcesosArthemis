@@ -183,6 +183,8 @@ COLUMNAS_NUEVAS = [
     ("procesos", "notas_clinica", "TEXT"),
     ("procesos", "propuesto_por", "TEXT"),
     ("usuarios", "ultimo_visto", "TEXT"),
+    ("procesos", "nota_revision", "TEXT"),
+    ("procesos", "revisado_en", "TEXT"),
 ]
 
 

@@ -323,6 +323,7 @@ function render() {
           ${nav('mapa', '⤳', 'Mapa', v)}
         ` : `
         ${nav('tablero', '◱', esAdmin() ? 'Tablero' : 'Mi avance', v)}
+        ${esAdmin() ? navConCuenta('revision', '✓', 'Revisión', v, porRevisar().length) : ''}
         ${nav('procesos', '▤', 'Procesos', v)}
         ${nav('mapa', '⤳', 'Mapa', v)}
         ${esAdmin() ? nav('asignacion', '⇄', 'Asignación', v) : ''}
@@ -353,17 +354,30 @@ function render() {
   const m = document.getElementById('main');
   const rutas = { tablero: vistaTablero, procesos: vistaProcesos, proceso: vistaProceso,
                   asignacion: vistaAsignacion, equipo: vistaEquipo, agenda: vistaAgenda,
-                  mapa: vistaMapa, avance: vistaAvanceClinica, plantilla: vistaPlantilla,
+                  mapa: vistaMapa, avance: vistaAvanceClinica, revision: vistaRevision,
+                  plantilla: vistaPlantilla,
                   ajustes: vistaAjustes, cuenta: vistaAjustes };
   if (esClinica() && !['agenda', 'avance', 'procesos', 'proceso', 'mapa'].includes(v)) {
     S.vista = 'agenda'; return render();
   }
   // Las pantallas de configuración son solo del administrador. Se comprueba
   // aquí además de ocultar el menú, por si alguien llega por otra vía.
-  const soloAdmin = ['asignacion', 'equipo', 'plantilla'];
+  const soloAdmin = ['asignacion', 'equipo', 'plantilla', 'revision'];
   if (soloAdmin.includes(v) && !esAdmin()) { S.vista = 'tablero'; return render(); }
   (rutas[v] || vistaTablero)(m);
 }
+/** Los procesos que esperan tu decisión. */
+function porRevisar() {
+  return S.procesos.filter(p => p.estado === 'en_revision');
+}
+
+function navConCuenta(k, ic, lb, v, n) {
+  const on = v === k;
+  return `<button data-v="${k}" class="${on ? 'on' : ''}">
+    <span class="ic">${ic}</span><span class="lb">${lb}</span>
+    ${n ? `<span class="badge-nav">${n}</span>` : ''}</button>`;
+}
+
 function nav(k, ic, lb, v) {
   const on = v === k || (k === 'procesos' && v === 'proceso');
   return `<button data-v="${k}" class="${on ? 'on' : ''}"><span class="ic">${ic}</span><span class="lb">${lb}</span></button>`;
@@ -425,6 +439,14 @@ function tableroPersonal(m) {
   m.innerHTML = `
   <div class="topbar"><h1>Hola, ${esc((S.yo.nombre || '').split(' ')[0])}</h1><div class="sp"></div>
     ${puedeEditar() ? '<button class="btn p" id="nuevoTab">+ Nuevo proceso</button>' : ''}</div>
+
+  ${(() => {
+    const dev = ps.filter(p => p.notaRevision && p.estado === 'en_curso');
+    return dev.length ? `<div class="banner" style="margin-bottom:16px">
+      <b>${dev.length} proceso(s) te los devolvieron para completar:</b>
+      ${dev.map(p => `<a href="#/proceso/${p.id}">${esc(p.nombre)}</a>`).join(' · ')}
+    </div>` : '';
+  })()}
 
   ${panelHoyVencidos(ps)}
 
@@ -760,6 +782,12 @@ function vistaProceso(m) {
       <label class="f" style="margin:0"><span class="lbl">¿Con quién hablar en la clínica?</span>
         <input type="text" id="pContacto" value="${esc(p.contacto || '')}" placeholder="Nombre y cargo de quien conoce el proceso" ${ro ? 'disabled' : ''}></label>
     </div>
+    ${p.notaRevision && p.estado === 'en_curso' ? `<div class="cuadro-devuelto">
+      <div class="cc-cab"><span class="cd-et">↩ Devuelto para completar</span>
+        <span class="tiny">${p.revisadoEn ? esc(fechaLarga(p.revisadoEn)) : ''}</span></div>
+      <div class="cc-lectura">${esc(p.notaRevision)}</div>
+      <div class="tiny" style="margin-top:8px">Cuando lo corrijas, vuelve a pulsar Enviar.</div>
+    </div>` : ''}
     ${cuadroClinica(p)}
     ${p.enviosTotal ? `<div class="aviso-env tiny" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:color-mix(in srgb,var(--ok) 12%,transparent)">
       ✓ Enviado ${p.enviosTotal} ${p.enviosTotal === 1 ? 'vez' : 'veces'}. Puedes seguir editando y subiendo; al reenviar se actualiza el informe con el mismo enlace.
@@ -3407,4 +3435,130 @@ async function pintarConfigIA() {
     await api('/ia/llave', { method: 'PUT', body: { llave: '' } });
     toast('Llave eliminada'); pintarConfigIA();
   };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Revisión — donde aterriza lo que las analistas envían
+
+   Un solo lugar para lo que espera decisión: leer el informe, pedir el
+   análisis de Claude, aprobarlo, y cerrar el proceso o devolverlo con
+   el motivo. Es la mesa de trabajo de la coordinación.
+   ═══════════════════════════════════════════════════════════════ */
+function vistaRevision(m) {
+  S.filtroRev = S.filtroRev || 'esperando';
+  const enviados = S.procesos.filter(p => p.estado === 'en_revision');
+  const aprobados = S.procesos.filter(p => p.estado === 'aprobado');
+  const devueltos = S.procesos.filter(p => p.notaRevision && p.estado === 'en_curso');
+
+  const listas = { esperando: enviados, aprobados, devueltos };
+  const lista = listas[S.filtroRev] || enviados;
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Revisión</h1><div class="sp"></div>
+    <div class="tabs">
+      <button class="tab ${S.filtroRev === 'esperando' ? 'on' : ''}" data-rev="esperando">
+        Esperando <span class="tiny">${enviados.length}</span></button>
+      <button class="tab ${S.filtroRev === 'aprobados' ? 'on' : ''}" data-rev="aprobados">
+        Aprobados <span class="tiny">${aprobados.length}</span></button>
+      <button class="tab ${S.filtroRev === 'devueltos' ? 'on' : ''}" data-rev="devueltos">
+        Devueltos <span class="tiny">${devueltos.length}</span></button>
+    </div>
+    <a class="btn sm" href="#/mapa">⤳ Ver el mapa</a>
+  </div>
+
+  ${S.filtroRev === 'esperando' && !enviados.length
+    ? `<div class="empty"><span class="e">✓</span>
+        Nada esperando. Cuando una analista pulse Enviar, el proceso aparece aquí.</div>`
+    : ''}
+
+  <div class="revision-lista">
+    ${lista.sort((a, b) => (b.enviadoEn || '').localeCompare(a.enviadoEn || ''))
+           .map(p => tarjetaRevision(p)).join('')}
+  </div>`;
+
+  m.querySelectorAll('[data-rev]').forEach(b => b.onclick = () => {
+    S.filtroRev = b.dataset.rev; vistaRevision(m);
+  });
+
+  m.querySelectorAll('[data-abrirproc]').forEach(b => b.onclick = () => abrirProceso(b.dataset.abrirproc));
+  m.querySelectorAll('[data-ia]').forEach(b => b.onclick = () => {
+    const p = S.procesos.find(x => x.id === b.dataset.ia);
+    if (p) modalAnalisis(p);
+  });
+  m.querySelectorAll('[data-aprobar]').forEach(b => b.onclick = () => decidirRevision(b.dataset.aprobar, 'aprobado', m));
+  m.querySelectorAll('[data-devolver]').forEach(b => b.onclick = () => decidirRevision(b.dataset.devolver, 'devuelto', m));
+}
+
+function tarjetaRevision(p) {
+  const ev = p.evidencias || [];
+  const av = avance(p);
+  const esperando = p.estado === 'en_revision';
+
+  return `<div class="rev-card ${esperando ? 'esperando' : ''}">
+    <div class="rev-cab">
+      <div style="flex:1;min-width:0">
+        <b class="rev-nom">${esc(p.nombre)}</b>
+        <div class="tiny">${esc(p.codigo || '')} · ${esc(p.area || 'Sin área')} ·
+          levantado por ${esc(nombrePersona(p.responsable))}
+          ${p.atiende ? ' · atendió ' + esc(p.atiende) : ''}</div>
+      </div>
+      <span class="pill ${p.estado}">${esc(etiquetaEstado(p.estado))}</span>
+    </div>
+
+    <div class="rev-datos">
+      <div><b>${av}%</b><span class="tiny">completo</span></div>
+      <div><b>${ev.filter(e => e.tipo === 'foto').length}</b><span class="tiny">fotos</span></div>
+      <div><b>${ev.filter(e => e.tipo === 'audio').length}</b><span class="tiny">audios</span></div>
+      <div><b>${p.enviosTotal || 0}</b><span class="tiny">envío(s)</span></div>
+      <div><b>${p.enviadoEn ? esc(fechaLarga(p.enviadoEn)) : '—'}</b><span class="tiny">enviado</span></div>
+    </div>
+
+    ${p.notaRevision ? `<div class="rev-nota">
+      <b>${p.estado === 'aprobado' ? 'Al aprobar escribiste:' : 'Se devolvió con este motivo:'}</b>
+      ${esc(p.notaRevision)}</div>` : ''}
+
+    <div class="rev-acciones">
+      ${p.informeUrl ? `<a class="btn" href="${esc(p.informeUrl)}" target="_blank" rel="noopener">📄 Leer informe</a>` : ''}
+      <button class="btn" data-abrirproc="${p.id}">Abrir el levantamiento</button>
+      <button class="btn" data-ia="${p.id}">✨ Análisis</button>
+      ${esperando ? `
+        <button class="btn" data-devolver="${p.id}">↩ Devolver</button>
+        <button class="btn p" data-aprobar="${p.id}">✓ Aprobar</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function decidirRevision(pid, decision, m) {
+  const p = S.procesos.find(x => x.id === pid);
+  if (!p) return;
+
+  const esAprobar = decision === 'aprobado';
+  modal(`<h3>${esAprobar ? 'Aprobar' : 'Devolver'} ${esc(p.nombre)}</h3>
+    <p class="mut" style="margin-top:-6px">
+      ${esAprobar
+        ? 'El proceso queda cerrado y sale de la bandeja. El informe sigue disponible.'
+        : `Vuelve a ${esc(nombrePersona(p.responsable))} en estado “En curso”. Verá el motivo dentro del proceso.`}
+    </p>
+    <label class="f"><span class="lbl">${esAprobar ? 'Observación (opcional)' : 'Motivo — qué falta o qué corregir'}</span>
+      <textarea id="revNota" placeholder="${esAprobar
+        ? 'Ej: quedó completo, sirve como referencia para las demás áreas.'
+        : 'Ej: falta el paso a paso de qué pasa cuando el sistema se cae, y las fotos del formato en papel.'}"></textarea></label>
+    <div class="flex">
+      <button class="btn" data-cerrar>Cancelar</button>
+      <button class="btn p right" id="revOk">${esAprobar ? 'Aprobar' : 'Devolver'}</button>
+    </div>`, box => {
+    box.querySelector('#revOk').onclick = async () => {
+      const nota = box.querySelector('#revNota').value.trim();
+      if (!esAprobar && !nota) { toast('Escribe el motivo: sin eso no sabe qué corregir'); return; }
+      try {
+        await api('/procesos/' + pid + '/revisar', { method: 'POST', body: { decision, nota } });
+        const d = await api('/procesos');
+        S.procesos = d.procesos;
+        cerrarModal();
+        render();
+        toast(esAprobar ? 'Proceso aprobado' : 'Devuelto a ' + nombrePersona(p.responsable));
+      } catch (e) { toast('No se pudo guardar la decisión'); }
+    };
+    setTimeout(() => box.querySelector('#revNota').focus(), 50);
+  });
 }

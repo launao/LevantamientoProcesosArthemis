@@ -184,6 +184,8 @@ def _procesos(solo_de=None):
             "contacto": p.get("contacto") or "",
             "atiende": p.get("atiende") or "",
             "notasClinica": p.get("notas_clinica") or "",
+            "notaRevision": p.get("nota_revision") or "",
+            "revisadoEn": str(p.get("revisado_en") or ""),
             "propuestoPor": p.get("propuesto_por") or "",
             "informeUrl": _url_informe(tokens.get(p["id"])),
             "enviadoEn": str(p.get("enviado_en") or ""),
@@ -562,6 +564,32 @@ def decidir_analisis(aid):
               "WHERE id=?", (estado, u["id"], _now(), D.jdump(contenido), aid))
     auditar("analisis_" + estado, "proceso", a["proceso_id"], f"{aplicadas} conexión(es)")
     return jsonify({"ok": True, "conexionesAplicadas": aplicadas})
+
+
+@api.post("/procesos/<pid>/revisar")
+@rol_required("admin")
+def revisar_proceso(pid):
+    """Aprobar cierra el proceso. Devolver lo regresa a quien lo levantó,
+    con el motivo, para que lo complete y lo vuelva a enviar."""
+    p = D.row("SELECT id, nombre, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+
+    d = request.get_json(silent=True) or {}
+    decision = d.get("decision")
+    if decision not in ("aprobado", "devuelto"):
+        return jsonify({"error": "decision_invalida"}), 400
+
+    nota = (d.get("nota") or "").strip()[:2000]
+    if decision == "devuelto" and not nota:
+        return jsonify({"error": "falta_motivo"}), 400
+
+    estado = "aprobado" if decision == "aprobado" else "en_curso"
+    D.execute(f"UPDATE procesos SET estado=?, nota_revision=?, revisado_en=?, "
+              f"actualizado={D.NOW} WHERE id=?",
+              (estado, nota, _now(), pid))
+    auditar("proceso_" + decision, "proceso", pid, nota[:120])
+    return jsonify({"ok": True, "estado": estado})
 
 
 @api.get("/indice")
