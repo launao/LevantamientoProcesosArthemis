@@ -374,22 +374,59 @@ function vistaTablero(m) {
   return esAdmin() ? tableroAdmin(m) : tableroPersonal(m);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Hoy y vencidos
+
+   Es lo primero que cualquiera necesita ver al entrar, sin importar
+   el rol: qué toca hoy y qué se quedó atrás. Cambia solo el alcance
+   —lo propio o lo de todos— y si se muestra o no de quién es.
+   ═══════════════════════════════════════════════════════════════ */
+function panelHoyVencidos(ps, opciones) {
+  const conDueno = (opciones || {}).conDueno;
+  const hoy = ps.filter(p => grupoDe(p, 'fecha') === 'hoy');
+  const vencidos = ps.filter(p => grupoDe(p, 'fecha') === 'vencidos')
+    .sort((a, b) => (a.fechaLimite || '').localeCompare(b.fechaLimite || ''));
+
+  const linea = p => `<a class="urg-item" href="#/proceso/${p.id}">
+    <span class="urg-nom">${esc(p.nombre)}</span>
+    <span class="urg-meta">${esc(p.area || 'Sin área')}${
+      conDueno ? ' · ' + esc(nombrePersona(p.responsable)) : ''}${
+      p.atiende ? ' · atiende ' + esc(p.atiende) : ''}</span>
+    <span class="urg-der">
+      ${textoPlazo(p.fechaLimite).html}
+      <span class="tiny">${avance(p)}%</span>
+    </span>
+  </a>`;
+
+  return `<div class="grid g2" style="margin-bottom:18px">
+    <div class="card panel-urg ${hoy.length ? 'activo' : ''}">
+      <h3>Para hoy <span class="cuenta-urg">${hoy.length}</span></h3>
+      ${hoy.length
+        ? `<div class="urg-lista">${hoy.map(linea).join('')}</div>`
+        : '<div class="mut">Nada programado para hoy.</div>'}
+    </div>
+
+    <div class="card panel-urg ${vencidos.length ? 'vencido' : ''}">
+      <h3>Pasados de fecha <span class="cuenta-urg">${vencidos.length}</span></h3>
+      ${vencidos.length
+        ? `<div class="urg-lista">${vencidos.slice(0, 8).map(linea).join('')}
+           ${vencidos.length > 8 ? `<div class="tiny" style="padding:8px 2px">y ${vencidos.length - 8} más</div>` : ''}</div>`
+        : '<div class="mut">Nada atrasado. Todo al día.</div>'}
+    </div>
+  </div>`;
+}
+
 /** Lo que ve quien levanta: solo su trabajo, sin ruido del resto. */
 function tableroPersonal(m) {
   const ps = S.procesos;
   const porEstado = k => ps.filter(p => (p.estado || 'pendiente') === k).length;
   const av = avanceGlobal();
-  const urgentes = ps.map(p => ({ p, plazo: textoPlazo(p.fechaLimite) }))
-    .filter(x => x.plazo.dias !== null && x.plazo.dias <= 3 && x.p.estado !== 'aprobado')
-    .sort((a, b) => a.plazo.dias - b.plazo.dias);
 
   m.innerHTML = `
   <div class="topbar"><h1>Hola, ${esc((S.yo.nombre || '').split(' ')[0])}</h1><div class="sp"></div>
     ${puedeEditar() ? '<button class="btn p" id="nuevoTab">+ Nuevo proceso</button>' : ''}</div>
 
-  ${urgentes.length ? `<div class="banner" style="margin-bottom:16px">
-    <b>Para pronto:</b> ${urgentes.map(x => `${esc(x.p.nombre)} (${x.plazo.dias < 0 ? 'vencido' : x.plazo.dias === 0 ? 'hoy' : 'en ' + x.plazo.dias + ' días'})`).join(' · ')}
-  </div>` : ''}
+  ${panelHoyVencidos(ps)}
 
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos a mi cargo</div></div>
@@ -418,19 +455,12 @@ function tableroAdmin(m) {
   const fotos = ps.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'foto').length, 0);
   const audios = ps.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'audio').length, 0);
   const av = avanceGlobal();
-  const vencidos = ps.filter(p => {
-    const pl = textoPlazo(p.fechaLimite);
-    return pl.dias !== null && pl.dias < 0 && p.estado !== 'aprobado';
-  });
 
   m.innerHTML = `
   <div class="topbar"><h1>Tablero</h1><div class="sp"></div>
     <button class="btn p" id="nuevoTab">+ Nuevo proceso</button></div>
 
-  ${vencidos.length ? `<div class="banner" style="margin-bottom:16px">
-    <b>${vencidos.length} proceso(s) pasados de fecha:</b>
-    ${vencidos.slice(0, 5).map(p => `${esc(p.nombre)} — ${esc(nombrePersona(p.responsable))}`).join(' · ')}
-  </div>` : ''}
+  ${panelHoyVencidos(ps, { conDueno: true })}
 
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos en total</div></div>
@@ -2974,6 +3004,8 @@ function vistaAvanceClinica(m) {
   ${sinAtender.length ? `<div class="banner" style="margin-bottom:16px">
     Hay ${sinAtender.length} proceso(s) donde todavía no han dicho quién de la clínica responde.
     Se asignan desde <b>Agenda</b>.</div>` : ''}
+
+  ${panelHoyVencidos(ps, { conDueno: true })}
 
   <div class="grid g2" style="margin-bottom:16px">
     <div class="card"><h3>Cómo va cada área</h3>
