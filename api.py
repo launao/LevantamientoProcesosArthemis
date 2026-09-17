@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request, send_file, Response
 
 import db as D
+import ia
 from sanitizar import limpiar_respuestas, a_texto_plano, limpiar_html
 from auth import (usuario_actual, iniciar_sesion, cerrar_sesion, login_required,
                   puede_editar, rol_required, hash_password, verify_password,
@@ -430,6 +431,137 @@ def nota_clinica(pid):
     D.execute("UPDATE procesos SET notas_clinica=? WHERE id=?", (texto, pid))
     auditar("nota_clinica", "proceso", pid)
     return jsonify({"ok": True})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Análisis con Claude
+# ═══════════════════════════════════════════════════════════════════════════
+
+@api.get("/ia/estado")
+@rol_required("admin")
+def ia_estado():
+    return jsonify({"configurada": ia.hay_llave(), "llave": ia.llave_enmascarada(),
+                    "modelo": ia.MODELO_DEFECTO})
+
+
+@api.put("/ia/llave")
+@rol_required("admin")
+def ia_llave():
+    d = request.get_json(silent=True) or {}
+    ia.guardar_llave(d.get("llave") or "")
+    auditar("ia_llave_actualizada")
+    return jsonify({"ok": True, "configurada": ia.hay_llave(),
+                    "llave": ia.llave_enmascarada()})
+
+
+@api.post("/ia/probar")
+@rol_required("admin")
+def ia_probar():
+    try:
+        modelo = ia.probar_llave()
+        return jsonify({"ok": True, "modelo": modelo})
+    except ia.IAError as e:
+        return jsonify({"error": e.codigo, "detalle": e.detalle}), 400
+
+
+@api.post("/procesos/<pid>/analizar")
+@puede_editar
+def analizar_proceso(pid):
+    p = D.row("SELECT * FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if not _mio(p, u):
+        return jsonify({"error": "no_es_tuyo"}), 403
+
+    plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
+    respuestas = D.jload(p["respuestas"], {})
+    avance, faltan = _avance(plantilla, respuestas)
+    if avance < 25:
+        return jsonify({"error": "muy_vacio", "avance": avance}), 422
+
+    nombres = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM usuarios")}
+    otros = D.rows("SELECT id, nombre, area FROM procesos "
+                   "WHERE COALESCE(eliminado,0)=0 AND id<>?", (pid,))
+    procesos = {x["id"]: x["nombre"] for x in otros}
+    evidencias = D.rows("SELECT tipo, nota FROM evidencias WHERE proceso_id=?", (pid,))
+
+    texto = ia.armar_texto(p, plantilla, respuestas, nombres, procesos, evidencias)
+    catalogo = [f"{x['nombre']} ({x['area'] or 'sin área'})" for x in otros]
+
+    try:
+        analisis, modelo, uso = ia.analizar(texto, catalogo)
+    except ia.IAError as e:
+        return jsonify({"error": e.codigo, "detalle": e.detalle}), 502
+
+    aid = _nuevo_id("an_")
+    D.execute("INSERT INTO analisis (id, proceso_id, contenido, modelo, estado, pedido_por) "
+              "VALUES (?,?,?,?,?,?)",
+              (aid, pid, D.jdump(analisis), modelo, "propuesto", u["id"]))
+    auditar("analisis_generado", "proceso", pid,
+            f"{uso['entrada']}+{uso['salida']} tokens")
+
+    return jsonify({"ok": True, "id": aid, "analisis": analisis,
+                    "modelo": modelo, "uso": uso, "avance": avance})
+
+
+@api.get("/procesos/<pid>/analisis")
+@login_required
+def listar_analisis(pid):
+    nombres = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM usuarios")}
+    filas = D.rows("SELECT * FROM analisis WHERE proceso_id=? ORDER BY creado DESC", (pid,))
+    return jsonify({"analisis": [{
+        "id": f["id"], "estado": f["estado"], "modelo": f["modelo"],
+        "pedidoPor": nombres.get(f["pedido_por"], ""),
+        "aprobadoPor": nombres.get(f["aprobado_por"], ""),
+        "creado": str(f["creado"]),
+        "contenido": D.jload(f["contenido"], {}),
+    } for f in filas]})
+
+
+@api.post("/analisis/<aid>/decidir")
+@rol_required("admin")
+def decidir_analisis(aid):
+    """El administrador aprueba o descarta. Solo lo aprobado sale en el informe."""
+    a = D.row("SELECT * FROM analisis WHERE id=?", (aid,))
+    if not a:
+        return jsonify({"error": "no_existe"}), 404
+
+    d = request.get_json(silent=True) or {}
+    estado = d.get("estado")
+    if estado not in ("aprobado", "descartado"):
+        return jsonify({"error": "estado_invalido"}), 400
+
+    u = usuario_actual()
+    contenido = D.jload(a["contenido"], {})
+
+    # Las conexiones aprobadas sí tocan el levantamiento: entran a los campos
+    # de enlace y con eso aparecen en el mapa.
+    aplicadas = 0
+    if estado == "aprobado" and isinstance(d.get("conexiones"), list):
+        p = D.row("SELECT respuestas FROM procesos WHERE id=?", (a["proceso_id"],))
+        respuestas = D.jload(p["respuestas"], {})
+        antes = set(respuestas.get("f_viene_de") or [])
+        despues = set(respuestas.get("f_va_hacia") or [])
+        for c in d["conexiones"]:
+            otro = D.row("SELECT id FROM procesos WHERE nombre=? AND COALESCE(eliminado,0)=0",
+                         (c.get("proceso") or "",))
+            if not otro:
+                continue
+            (antes if c.get("direccion") == "antes" else despues).add(otro["id"])
+            aplicadas += 1
+        if aplicadas:
+            _guardar_version(a["proceso_id"], u["id"], "antes de aplicar conexiones del análisis")
+            respuestas["f_viene_de"] = sorted(antes)
+            respuestas["f_va_hacia"] = sorted(despues)
+            D.execute("UPDATE procesos SET respuestas=? WHERE id=?",
+                      (D.jdump(respuestas), a["proceso_id"]))
+        contenido["conexiones_aprobadas"] = d["conexiones"]
+
+    D.execute("UPDATE analisis SET estado=?, aprobado_por=?, aprobado_en=?, contenido=? "
+              "WHERE id=?", (estado, u["id"], _now(), D.jdump(contenido), aid))
+    auditar("analisis_" + estado, "proceso", a["proceso_id"], f"{aplicadas} conexión(es)")
+    return jsonify({"ok": True, "conexionesAplicadas": aplicadas})
 
 
 @api.get("/indice")
@@ -1094,6 +1226,9 @@ def datos_informe(token):
             "atiende": p.get("atiende") or "",
         },
         "nota_clinica": p.get("notas_clinica") or "",
+        "analisis": (lambda f: D.jload(f["contenido"], {}) if f else None)(
+            D.row("SELECT contenido FROM analisis WHERE proceso_id=? AND estado='aprobado' "
+                  "ORDER BY creado DESC LIMIT 1", (t["proceso_id"],))),
         "avance": avance,
         "secciones": secciones,
         "sueltas": sueltas,

@@ -734,6 +734,7 @@ function vistaProceso(m) {
     <button class="btn sm" id="volver">← Procesos</button><div class="sp"></div>
     <span class="tiny" id="estadoGuardado"></span>
     ${ro ? '' : '<button class="btn sm" id="btnGuardar" title="Guardar ahora (Ctrl+S)">Guardar</button>'}
+    ${ro ? '' : '<button class="btn sm" id="btnIA" title="Que Claude analice este levantamiento">✨ Análisis</button>'}
     ${p.informeUrl ? '<button class="btn sm" id="btnInforme" title="Ver y compartir el informe enviado">📄 Informe</button>' : ''}
     ${ro ? '' : '<button class="btn sm" id="btnHist" title="Ver y recuperar versiones anteriores">🕘 Historial</button>'}
     ${ro ? '' : '<button class="btn sm" id="btnQR">📱 Celular</button>'}
@@ -785,6 +786,9 @@ function vistaProceso(m) {
   pintarEstadoGuardado(S.dirty ? 'escribiendo' : 'guardado');
   const be = document.getElementById('btnEnviar');
   if (be) be.onclick = () => enviarProceso(p);
+
+  const bia = document.getElementById('btnIA');
+  if (bia) bia.onclick = () => modalAnalisis(p);
 
   const bi = document.getElementById('btnInforme');
   if (bi) bi.onclick = () => modalInforme(p);
@@ -1853,6 +1857,14 @@ function vistaAjustes(m) {
         <label class="f"><span class="lbl">Nueva contraseña</span><input type="password" id="pwB" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></label>
         <button class="btn" id="pwOk">Cambiar contraseña</button>
       </div>
+      ${esAdmin() ? `<div class="card" style="margin-bottom:14px">
+        <h3>Análisis con Claude</h3>
+        <p class="mut">Con una llave de Anthropic, cada proceso puede pedir un análisis:
+          resumen, paso a paso ordenado, mejoras, automatizaciones y conexiones sugeridas.
+          El análisis nunca modifica el levantamiento; solo se adjunta lo que apruebes.</p>
+        <div id="iaConf" class="mut" style="margin-top:10px">Consultando…</div>
+      </div>` : ''}
+
       <div class="card">
         <h3>Apariencia</h3>
         <div class="flex" style="gap:8px">
@@ -1906,6 +1918,8 @@ function vistaAjustes(m) {
       toast(c === 'password_actual_incorrecta' ? 'La contraseña actual no coincide' : (c || 'No se pudo cambiar'));
     }
   };
+
+  if (esAdmin()) pintarConfigIA();
 
   m.querySelectorAll('[data-tema]').forEach(b => b.onclick = () => {
     const t = b.dataset.tema;
@@ -3160,4 +3174,238 @@ async function modalInforme(p) {
       box.querySelector('#infEnvios').innerHTML = '';
     }
   });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Análisis con Claude
+
+   Genera un documento paralelo al levantamiento. No lo reemplaza ni lo
+   modifica: queda al lado, y solo entra al proceso lo que el
+   administrador apruebe. Las conexiones aprobadas sí se aplican, porque
+   de ellas vive el mapa.
+   ═══════════════════════════════════════════════════════════════ */
+async function modalAnalisis(p) {
+  modal(`<h3>Análisis de ${esc(p.nombre)}</h3>
+    <div id="iaCuerpo"><div class="mut">Buscando análisis anteriores…</div></div>
+    <div class="flex" style="margin-top:16px">
+      <button class="btn p" id="iaGenerar">✨ Analizar ahora</button>
+      <button class="btn right" data-cerrar>Cerrar</button>
+    </div>`, async box => {
+    const cuerpo = box.querySelector('#iaCuerpo');
+    const btn = box.querySelector('#iaGenerar');
+
+    const cargar = async () => {
+      try {
+        const d = await api('/procesos/' + p.id + '/analisis');
+        pintarAnalisis(cuerpo, p, d.analisis);
+        btn.textContent = d.analisis.length ? '✨ Analizar de nuevo' : '✨ Analizar ahora';
+      } catch (_) { cuerpo.innerHTML = '<div class="mut">No se pudo consultar.</div>'; }
+    };
+
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = 'Analizando… puede tardar un minuto';
+      cuerpo.innerHTML = '<div class="mut">Claude está leyendo el levantamiento completo: respuestas, actividades, sub-actividades y notas. No cierres esta ventana.</div>';
+      try {
+        await api('/procesos/' + p.id + '/analizar', { method: 'POST' });
+        await cargar();
+        toast('Análisis listo');
+      } catch (e) {
+        const c = (e.data && e.data.error) || '';
+        const msg = {
+          sin_llave: 'Falta configurar la llave de Claude en Ajustes.',
+          llave_invalida: 'La llave de Claude no es válida. Revísala en Ajustes.',
+          sin_saldo: 'La cuenta de Anthropic no tiene saldo.',
+          limite_alcanzado: 'Se alcanzó el límite de peticiones. Espera un momento.',
+          sin_conexion: 'El servidor no pudo comunicarse con Claude.',
+          muy_vacio: `El levantamiento va en ${(e.data || {}).avance || 0}%. Con tan poco, el análisis no diría nada útil.`,
+          respuesta_ilegible: 'Claude devolvió algo que no se pudo interpretar. Intenta otra vez.'
+        }[c] || 'No se pudo generar el análisis.';
+        cuerpo.innerHTML = `<div class="aviso-ia error">${esc(msg)}
+          ${(e.data && e.data.detalle) ? `<div class="tiny" style="margin-top:6px">${esc(e.data.detalle)}</div>` : ''}</div>`;
+      }
+      btn.disabled = false;
+      btn.textContent = '✨ Analizar de nuevo';
+    };
+
+    await cargar();
+  });
+}
+
+function pintarAnalisis(cuerpo, p, lista) {
+  if (!lista.length) {
+    cuerpo.innerHTML = `<div class="aviso-ia">
+      Claude leerá todo lo levantado y devolverá un documento aparte: resumen, el paso a
+      paso ordenado, dolores con su impacto, propuestas de mejora y de automatización,
+      riesgos, y con qué otros procesos parece conectar.
+      <br><br>Nada de eso toca el levantamiento original. Tú decides qué se aprueba.
+    </div>`;
+    return;
+  }
+
+  const a = lista[0];
+  const c = a.contenido || {};
+  const l = x => Array.isArray(x) ? x : [];
+
+  const bloque = (titulo, contenido) => contenido
+    ? `<section class="ia-bloque"><h4>${titulo}</h4>${contenido}</section>` : '';
+
+  cuerpo.innerHTML = `
+    <div class="ia-cab">
+      <span class="pill ${a.estado === 'aprobado' ? 'aprobado' : a.estado === 'descartado' ? 'pendiente' : 'en_revision'}">
+        ${a.estado === 'aprobado' ? 'Aprobado' : a.estado === 'descartado' ? 'Descartado' : 'Por revisar'}</span>
+      <span class="tiny">${esc(fechaLarga(a.creado))} · pedido por ${esc(a.pedidoPor)}
+        ${a.aprobadoPor ? ' · revisado por ' + esc(a.aprobadoPor) : ''}</span>
+    </div>
+
+    ${bloque('Resumen', c.resumen ? `<p>${esc(c.resumen)}</p>` : '')}
+
+    ${c.calidad ? `<div class="ia-calidad ${esc(c.calidad.completitud || '')}">
+      <b>Completitud del levantamiento: ${esc(c.calidad.completitud || 'n/d')}</b>
+      ${l(c.calidad.vacios).length ? `<ul>${l(c.calidad.vacios).map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : ''}
+    </div>` : ''}
+
+    ${bloque('Paso a paso, ordenado', l(c.pasos_mejorados).length
+      ? `<ol class="ia-pasos">${l(c.pasos_mejorados).map(x => `<li>
+          <b>${esc(x.actividad || '')}</b>
+          <div class="tiny">${esc(x.responsable || '?')} · ${esc(x.sistema || '?')}</div>
+          ${x.observacion ? `<div class="ia-obs">${esc(x.observacion)}</div>` : ''}
+        </li>`).join('')}</ol>` : '')}
+
+    ${bloque('Dolores y su impacto', l(c.dolores).length
+      ? `<ul class="ia-lista">${l(c.dolores).map(x =>
+          `<li><b>${esc(x.dolor || '')}</b><div class="tiny">${esc(x.impacto || '')}</div></li>`).join('')}</ul>` : '')}
+
+    ${bloque('Qué se podría optimizar', l(c.optimizaciones).length
+      ? `<ul class="ia-lista">${l(c.optimizaciones).map(x => `<li>
+          <b>${esc(x.propuesta || '')}</b>
+          <div class="tiny">${esc(x.por_que || '')}</div>
+          <div class="ia-etiquetas">
+            <span class="et esfuerzo-${esc(x.esfuerzo || '')}">esfuerzo ${esc(x.esfuerzo || '?')}</span>
+            <span class="et impacto-${esc(x.impacto || '')}">impacto ${esc(x.impacto || '?')}</span>
+          </div></li>`).join('')}</ul>` : '')}
+
+    ${bloque('Qué se podría automatizar', l(c.automatizaciones).length
+      ? `<ul class="ia-lista">${l(c.automatizaciones).map(x => `<li>
+          <b>${esc(x.propuesta || '')}</b>
+          <div class="tiny">${esc(x.que_haria_el_sistema || '')}</div>
+          ${x.requisito ? `<div class="ia-obs">Hace falta: ${esc(x.requisito)}</div>` : ''}
+        </li>`).join('')}</ul>` : '')}
+
+    ${bloque('Riesgos', l(c.riesgos).length
+      ? `<ul class="ia-lista">${l(c.riesgos).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '')}
+
+    ${bloque('Preguntas para la siguiente visita', l(c.preguntas_para_la_siguiente_visita).length
+      ? `<ul class="ia-lista">${l(c.preguntas_para_la_siguiente_visita).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '')}
+
+    ${l(c.conexiones).length ? `<section class="ia-bloque">
+      <h4>Conexiones que propone</h4>
+      <p class="tiny">Marca las que sean ciertas. Al aprobar el análisis, esas se aplican
+        al proceso y aparecen en el mapa. Las demás se ignoran.</p>
+      <div class="ia-conexiones">${l(c.conexiones).map((x, i) => `
+        <label class="ia-conex">
+          <input type="checkbox" data-conex="${i}" ${esAdmin() ? '' : 'disabled'}
+            ${(c.conexiones_aprobadas || []).some(y => y.proceso === x.proceso) ? 'checked' : ''}>
+          <span>
+            <b>${x.direccion === 'antes' ? 'Viene de' : 'Pasa a'}: ${esc(x.proceso || '')}</b>
+            <span class="et conf-${esc(x.confianza || '')}">${esc(x.confianza || '')}</span>
+            <div class="tiny">${esc(x.razon || '')}</div>
+          </span>
+        </label>`).join('')}</div>
+    </section>` : ''}
+
+    ${esAdmin() && a.estado === 'propuesto' ? `<div class="ia-decidir">
+      <button class="btn" id="iaDescartar">Descartar</button>
+      <button class="btn p right" id="iaAprobar">Aprobar y adjuntar</button>
+    </div>` : ''}
+
+    ${a.estado === 'aprobado' ? '<div class="aviso-ia ok">Aprobado: sale adjunto en el informe que se comparte.</div>' : ''}
+    ${!esAdmin() && a.estado === 'propuesto' ? '<div class="aviso-ia">Pendiente de que la coordinación lo revise.</div>' : ''}
+
+    ${lista.length > 1 ? `<div class="tiny" style="margin-top:12px">Hay ${lista.length - 1} análisis anterior(es) de este proceso.</div>` : ''}`;
+
+  const decidir = async estado => {
+    const conexiones = [...cuerpo.querySelectorAll('[data-conex]:checked')]
+      .map(cb => l(c.conexiones)[+cb.dataset.conex]);
+    try {
+      const r = await api('/analisis/' + a.id + '/decidir',
+                          { method: 'POST', body: { estado, conexiones } });
+      if (r.conexionesAplicadas) {
+        const d = await api('/procesos');
+        S.procesos = d.procesos;
+        const fresco = S.procesos.find(x => x.id === p.id);
+        if (fresco && S.draft && S.draft.id === p.id) S.draft.respuestas = fresco.respuestas;
+        toast(`Aprobado · ${r.conexionesAplicadas} conexión(es) aplicadas al mapa`);
+      } else {
+        toast(estado === 'aprobado' ? 'Análisis aprobado' : 'Análisis descartado');
+      }
+      const d2 = await api('/procesos/' + p.id + '/analisis');
+      pintarAnalisis(cuerpo, p, d2.analisis);
+    } catch (_) { toast('No se pudo guardar la decisión'); }
+  };
+
+  const ap = cuerpo.querySelector('#iaAprobar');
+  if (ap) ap.onclick = () => decidir('aprobado');
+  const de = cuerpo.querySelector('#iaDescartar');
+  if (de) de.onclick = () => decidir('descartado');
+}
+
+/* Configuración de la llave. Nunca vuelve completa al navegador: el
+   servidor solo devuelve una versión enmascarada. */
+async function pintarConfigIA() {
+  const caja = document.getElementById('iaConf');
+  if (!caja) return;
+  let e;
+  try { e = await api('/ia/estado'); }
+  catch (_) { caja.innerHTML = '<div class="mut">No se pudo consultar.</div>'; return; }
+
+  caja.innerHTML = `
+    ${e.configurada
+      ? `<div class="aviso-ia ok">Llave configurada: <b>${esc(e.llave)}</b> · modelo ${esc(e.modelo)}</div>`
+      : '<div class="aviso-ia">Todavía no hay llave. El botón de análisis no funcionará.</div>'}
+    <label class="f" style="margin-top:12px">
+      <span class="lbl">${e.configurada ? 'Reemplazar la llave' : 'Llave de Anthropic'}</span>
+      <span class="hint">Se obtiene en console.anthropic.com → API keys. Empieza por sk-ant-.
+        Se guarda en el servidor y no vuelve a mostrarse completa.</span>
+      <input type="password" id="iaLlave" placeholder="sk-ant-..." autocomplete="off">
+    </label>
+    <div class="flex wrap" style="gap:8px">
+      <button class="btn p" id="iaGuardar">Guardar llave</button>
+      <button class="btn" id="iaProbar">Probar conexión</button>
+      ${e.configurada ? '<button class="btn danger" id="iaBorrar">Quitar llave</button>' : ''}
+      <span class="tiny" id="iaEco"></span>
+    </div>`;
+
+  const eco = caja.querySelector('#iaEco');
+
+  caja.querySelector('#iaGuardar').onclick = async () => {
+    const v = caja.querySelector('#iaLlave').value.trim();
+    if (!v) { toast('Pega la llave primero'); return; }
+    try {
+      await api('/ia/llave', { method: 'PUT', body: { llave: v } });
+      toast('Llave guardada'); pintarConfigIA();
+    } catch (_) { toast('No se pudo guardar'); }
+  };
+
+  caja.querySelector('#iaProbar').onclick = async () => {
+    eco.textContent = 'Probando…';
+    try {
+      const r = await api('/ia/probar', { method: 'POST' });
+      eco.textContent = '✓ Responde correctamente (' + r.modelo + ')';
+    } catch (err) {
+      const c = (err.data && err.data.error) || '';
+      eco.textContent = {
+        sin_llave: 'Falta la llave',
+        llave_invalida: '✗ La llave no es válida',
+        sin_conexion: '✗ El servidor no alcanza a Anthropic'
+      }[c] || '✗ No respondió';
+    }
+  };
+
+  const borrar = caja.querySelector('#iaBorrar');
+  if (borrar) borrar.onclick = async () => {
+    if (!confirm('Se quitará la llave y dejará de funcionar el análisis. ¿Seguir?')) return;
+    await api('/ia/llave', { method: 'PUT', body: { llave: '' } });
+    toast('Llave eliminada'); pintarConfigIA();
+  };
 }

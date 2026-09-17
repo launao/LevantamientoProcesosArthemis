@@ -125,6 +125,24 @@ def _ddl():
               creado     {ts}
             )""",
 
+        f"""CREATE TABLE IF NOT EXISTS analisis (
+              id          {txt} PRIMARY KEY,
+              proceso_id  {txt} NOT NULL,
+              contenido   {txt} NOT NULL,
+              modelo      {txt},
+              estado      {txt} DEFAULT 'propuesto',
+              pedido_por  {txt},
+              aprobado_por {txt},
+              aprobado_en {txt},
+              creado      {ts}
+            )""",
+
+        f"""CREATE TABLE IF NOT EXISTS secretos (
+              clave  {txt} PRIMARY KEY,
+              valor  {txt} NOT NULL,
+              actualizado {ts}
+            )""",
+
         f"""CREATE TABLE IF NOT EXISTS auditoria (
               id         {txt} PRIMARY KEY,
               usuario_id {txt},
@@ -144,6 +162,7 @@ def _ddl():
         "CREATE INDEX IF NOT EXISTS ix_tok_proc ON capture_tokens(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_env_proc ON envios(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_ver_proc ON versiones(proceso_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ana_proc ON analisis(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_share_proc ON share_tokens(proceso_id)",
     ]
 

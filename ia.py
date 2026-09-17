@@ -1,0 +1,295 @@
+"""
+ia.py — Análisis del levantamiento con Claude.
+
+Lo que hace: toma un proceso ya levantado —respuestas, actividades,
+sub-actividades, notas— y le pide a Claude que devuelva un documento
+paralelo: resumen, paso a paso limpio, oportunidades de optimización y
+automatización, y qué otros procesos parecen conectar con este.
+
+Lo que NO hace: tocar el levantamiento original. El análisis vive aparte
+y solo entra al proceso si alguien lo aprueba. La máquina propone; la
+persona que conoce la clínica decide.
+"""
+import json
+import os
+import re
+import urllib.error
+import urllib.request
+
+import db as D
+from sanitizar import a_texto_plano
+
+API_URL = "https://api.anthropic.com/v1/messages"
+MODELO_DEFECTO = os.environ.get("CLAUDE_MODELO", "claude-sonnet-5")
+TIMEOUT = 120
+
+
+class IAError(Exception):
+    """Falla al pedir o interpretar el análisis."""
+
+    def __init__(self, codigo, detalle=""):
+        super().__init__(codigo)
+        self.codigo = codigo
+        self.detalle = detalle
+
+
+# ── La llave ────────────────────────────────────────────────────────────────
+
+def guardar_llave(valor: str):
+    """La llave vive en la base, no en el código ni en el navegador."""
+    valor = (valor or "").strip()
+    if not valor:
+        D.execute("DELETE FROM secretos WHERE clave='anthropic'")
+        return
+    if D.row("SELECT clave FROM secretos WHERE clave='anthropic'"):
+        D.execute("UPDATE secretos SET valor=? WHERE clave='anthropic'", (valor,))
+    else:
+        D.execute("INSERT INTO secretos (clave, valor) VALUES ('anthropic', ?)", (valor,))
+
+
+def leer_llave():
+    fila = D.row("SELECT valor FROM secretos WHERE clave='anthropic'")
+    if fila and fila["valor"]:
+        return fila["valor"]
+    return os.environ.get("ANTHROPIC_API_KEY", "").strip()
+
+
+def hay_llave():
+    return bool(leer_llave())
+
+
+def llave_enmascarada():
+    """Para mostrar en pantalla sin exponerla: sk-ant-…4f2a."""
+    k = leer_llave()
+    if not k:
+        return ""
+    return (k[:7] + "…" + k[-4:]) if len(k) > 14 else "configurada"
+
+
+# ── El texto que se le manda ────────────────────────────────────────────────
+
+def _valor_legible(campo, valor, nombres, procesos):
+    tipo = campo.get("tipo")
+    if valor is None or valor == "" or valor == []:
+        return None
+
+    if tipo == "pasos" and isinstance(valor, list):
+        lineas = []
+        for i, r in enumerate(valor):
+            if not r.get("actividad"):
+                continue
+            lineas.append(f"  Actividad {i+1}: {r['actividad']}"
+                          f" | responsable: {r.get('responsable') or '?'}"
+                          f" | sistema: {r.get('sistema') or '?'}"
+                          f" | tiempo: {r.get('tiempo') or '?'}")
+            if r.get("detalle"):
+                lineas.append(f"    Cómo se hace: {a_texto_plano(r['detalle'])}")
+            for j, t in enumerate(r.get("subtareas") or []):
+                texto = t.get("texto") if isinstance(t, dict) else str(t)
+                detalle = t.get("detalle") if isinstance(t, dict) else ""
+                if not texto:
+                    continue
+                lineas.append(f"    {i+1}.{j+1} {texto}"
+                              + (f" — {a_texto_plano(detalle)}" if detalle else ""))
+        return "\n".join(lineas) or None
+
+    if tipo == "multi" and isinstance(valor, list):
+        return ", ".join(valor)
+    if tipo == "persona":
+        return nombres.get(valor, "")
+    if tipo == "procesos" and isinstance(valor, list):
+        return ", ".join(procesos.get(x, x) for x in valor)
+    return a_texto_plano(str(valor))
+
+
+def armar_texto(proceso, plantilla, respuestas, nombres, procesos, evidencias):
+    partes = [
+        f"PROCESO: {proceso['nombre']}",
+        f"Código: {proceso.get('codigo') or 'sin código'}",
+        f"Área: {proceso.get('area') or 'sin área'}",
+        f"Levantado por: {nombres.get(proceso.get('responsable_id'), 'n/d')}",
+    ]
+    if proceso.get("notas_clinica"):
+        partes.append(f"Advertencia de la clínica: {a_texto_plano(proceso['notas_clinica'])}")
+    partes.append("")
+
+    for sec in plantilla.get("secciones", []):
+        lineas = []
+        for c in sec.get("campos", []):
+            v = _valor_legible(c, respuestas.get(c["id"]), nombres, procesos)
+            if v:
+                lineas.append(f"- {c['etiqueta']}: {v}")
+        if lineas:
+            partes.append(f"## {sec.get('nombre', '')}")
+            partes.extend(lineas)
+            partes.append("")
+
+    fotos = sum(1 for e in evidencias if e["tipo"] == "foto")
+    audios = sum(1 for e in evidencias if e["tipo"] == "audio")
+    notas = [a_texto_plano(e["nota"]) for e in evidencias
+             if e["tipo"] == "nota" and e.get("nota")]
+    partes.append(f"## Evidencia recogida\n- {fotos} foto(s), {audios} nota(s) de voz")
+    if notas:
+        partes.append("- Notas escritas en campo: " + " / ".join(notas))
+
+    return "\n".join(partes)
+
+
+SISTEMA = """Eres un analista de procesos con experiencia en instituciones de salud \
+colombianas. Recibes el levantamiento de un proceso hecho en campo por alguien que \
+entrevistó al personal que lo ejecuta.
+
+Tu trabajo es producir un documento paralelo que le sirva a la coordinación para \
+decidir. No reescribes el levantamiento: lo interpretas.
+
+Reglas que no puedes romper:
+- No inventes datos. Si algo no está en el levantamiento, dilo como vacío detectado, \
+no lo completes con lo que suele pasar en otras clínicas.
+- Distingue siempre lo que la persona dijo de lo que tú deduces.
+- Escribe en español de Colombia, claro y directo, sin jerga de consultoría. \
+Quien lee esto coordina una clínica, no compra metodologías.
+- Sé concreto en las propuestas: "que al digitar la cédula traiga los datos del \
+paciente" sirve; "implementar una solución de gestión documental" no sirve.
+- Si el levantamiento está muy incompleto, dilo con franqueza en 'calidad' en vez de \
+producir un análisis bonito sobre nada.
+
+Respondes ÚNICAMENTE con un objeto JSON válido, sin texto antes ni después y sin \
+marcas de código. Esta es la forma exacta:
+
+{
+  "resumen": "4 a 6 líneas sobre qué hace este proceso y qué problema real tiene",
+  "calidad": {
+    "completitud": "alta | media | baja",
+    "vacios": ["qué falta preguntar, en lenguaje de pregunta concreta"]
+  },
+  "pasos_mejorados": [
+    {"n": 1, "actividad": "...", "responsable": "...", "sistema": "...",
+     "observacion": "qué se aclaró o corrigió frente a lo que quedó escrito"}
+  ],
+  "dolores": [
+    {"dolor": "...", "impacto": "a qué afecta: tiempo, glosas, paciente, reprocesos"}
+  ],
+  "optimizaciones": [
+    {"propuesta": "...", "por_que": "...", "esfuerzo": "bajo | medio | alto",
+     "impacto": "bajo | medio | alto"}
+  ],
+  "automatizaciones": [
+    {"propuesta": "...", "que_haria_el_sistema": "...", "requisito": "qué hace falta para poder hacerlo"}
+  ],
+  "riesgos": ["..."],
+  "conexiones": [
+    {"proceso": "nombre exacto de la lista de procesos existentes, o el nombre tal como lo mencionaron",
+     "direccion": "antes | despues",
+     "razon": "por qué crees que conectan",
+     "confianza": "alta | media | baja"}
+  ],
+  "preguntas_para_la_siguiente_visita": ["..."]
+}
+
+Las listas pueden ir vacías si no hay nada que decir. Prefiere tres cosas buenas a \
+diez de relleno."""
+
+
+def _pedir(llave, modelo, prompt):
+    cuerpo = json.dumps({
+        "model": modelo,
+        "max_tokens": 4000,
+        "system": SISTEMA,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+
+    req = urllib.request.Request(API_URL, data=cuerpo, method="POST", headers={
+        "content-type": "application/json",
+        "x-api-key": llave,
+        "anthropic-version": "2023-06-01",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detalle = ""
+        try:
+            detalle = json.loads(e.read().decode("utf-8")).get("error", {}).get("message", "")
+        except Exception:
+            pass
+        if e.code == 401:
+            raise IAError("llave_invalida", detalle)
+        if e.code == 429:
+            raise IAError("limite_alcanzado", detalle)
+        if e.code == 400 and "credit" in detalle.lower():
+            raise IAError("sin_saldo", detalle)
+        raise IAError("error_api", f"HTTP {e.code}: {detalle}")
+    except urllib.error.URLError as e:
+        raise IAError("sin_conexion", str(e.reason))
+    except Exception as e:
+        raise IAError("error_api", str(e))
+
+
+def _extraer_json(texto):
+    """Claude a veces enmarca el JSON aunque se le pida que no. Se limpia."""
+    t = (texto or "").strip()
+    t = re.sub(r"^```(?:json)?\s*", "", t)
+    t = re.sub(r"\s*```$", "", t)
+    try:
+        return json.loads(t)
+    except ValueError:
+        pass
+    ini, fin = t.find("{"), t.rfind("}")
+    if ini >= 0 and fin > ini:
+        try:
+            return json.loads(t[ini:fin + 1])
+        except ValueError:
+            pass
+    raise IAError("respuesta_ilegible", t[:300])
+
+
+def analizar(texto_proceso, lista_procesos, modelo=None):
+    """Devuelve (analisis, modelo, uso)."""
+    llave = leer_llave()
+    if not llave:
+        raise IAError("sin_llave")
+
+    modelo = modelo or MODELO_DEFECTO
+    catalogo = "\n".join(f"- {p}" for p in lista_procesos) or "- (ninguno todavía)"
+    prompt = (
+        "Analiza este levantamiento de proceso.\n\n"
+        "Procesos ya registrados en la clínica, para que puedas proponer conexiones "
+        "usando sus nombres exactos:\n" + catalogo +
+        "\n\n=== LEVANTAMIENTO ===\n" + texto_proceso
+    )
+
+    data = _pedir(llave, modelo, prompt)
+    texto = "".join(b.get("text", "") for b in data.get("content", [])
+                    if b.get("type") == "text")
+    uso = data.get("usage", {})
+    return _extraer_json(texto), data.get("model", modelo), {
+        "entrada": uso.get("input_tokens", 0),
+        "salida": uso.get("output_tokens", 0),
+    }
+
+
+def probar_llave(modelo=None):
+    """Una llamada mínima, para avisar antes de que falle en medio del trabajo."""
+    llave = leer_llave()
+    if not llave:
+        raise IAError("sin_llave")
+    cuerpo = json.dumps({
+        "model": modelo or MODELO_DEFECTO,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "Responde solo: ok"}],
+    }).encode("utf-8")
+    req = urllib.request.Request(API_URL, data=cuerpo, method="POST", headers={
+        "content-type": "application/json",
+        "x-api-key": llave,
+        "anthropic-version": "2023-06-01",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.loads(r.read().decode("utf-8"))
+            return d.get("model", modelo or MODELO_DEFECTO)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise IAError("llave_invalida")
+        raise IAError("error_api", f"HTTP {e.code}")
+    except Exception as e:
+        raise IAError("sin_conexion", str(e))

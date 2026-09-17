@@ -44,6 +44,8 @@
   .cx:last-child{border-bottom:0}
   .cx h3{margin:0 0 8px;font-size:15px;font-weight:600}
   .cx .txt{white-space:pre-wrap;color:var(--ink-2);line-height:1.65}
+  .cx ul.txt{padding-left:22px;line-height:1.7}
+  .cx ul.txt li{margin-bottom:9px}
   .cx .txt ul{margin:6px 0;padding-left:22px;white-space:normal}
   .cx .txt mark{background:#FFE79A;color:#3a2c00;padding:0 2px;border-radius:3px}
   .pasos{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}
@@ -249,6 +251,45 @@
       </div>
     {% endif %}
   </div>
+
+  {% if datos.analisis %}
+  <div class="cuerpo">
+    <div class="sx"><h2>Análisis y recomendaciones</h2></div>
+    <p class="tiny" style="margin:0 0 18px">Documento generado con apoyo de inteligencia
+      artificial a partir de este levantamiento, y revisado y aprobado por la coordinación.</p>
+
+    {% set a = datos.analisis %}
+    {% if a.resumen %}<div class="cx"><h3>Resumen</h3><div class="txt">{{ a.resumen }}</div></div>{% endif %}
+
+    {% if a.pasos_mejorados %}
+    <div class="cx"><h3>Paso a paso, ordenado</h3>
+      <table class="pasos"><thead><tr><th></th><th>Actividad</th><th>Responsable</th><th>Sistema</th></tr></thead>
+      <tbody>{% for x in a.pasos_mejorados %}
+        <tr><td>{{ loop.index }}</td><td>{{ x.actividad }}</td>
+            <td>{{ x.responsable or '—' }}</td><td>{{ x.sistema or '—' }}</td></tr>
+        {% if x.observacion %}<tr class="det"><td></td><td colspan="3">
+          <div class="det-txt">{{ x.observacion }}</div></td></tr>{% endif %}
+      {% endfor %}</tbody></table>
+    </div>{% endif %}
+
+    {% if a.dolores %}<div class="cx"><h3>Dolores y su impacto</h3>
+      <ul class="txt">{% for x in a.dolores %}<li><b>{{ x.dolor }}</b> — {{ x.impacto }}</li>{% endfor %}</ul></div>{% endif %}
+
+    {% if a.optimizaciones %}<div class="cx"><h3>Qué se podría optimizar</h3>
+      <ul class="txt">{% for x in a.optimizaciones %}<li><b>{{ x.propuesta }}</b><br>{{ x.por_que }}
+        <span class="tiny">(esfuerzo {{ x.esfuerzo }} · impacto {{ x.impacto }})</span></li>{% endfor %}</ul></div>{% endif %}
+
+    {% if a.automatizaciones %}<div class="cx"><h3>Qué se podría automatizar</h3>
+      <ul class="txt">{% for x in a.automatizaciones %}<li><b>{{ x.propuesta }}</b><br>{{ x.que_haria_el_sistema }}
+        {% if x.requisito %}<br><span class="tiny">Hace falta: {{ x.requisito }}</span>{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+
+    {% if a.riesgos %}<div class="cx"><h3>Riesgos</h3>
+      <ul class="txt">{% for x in a.riesgos %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+
+    {% if a.preguntas_para_la_siguiente_visita %}<div class="cx"><h3>Pendiente por preguntar</h3>
+      <ul class="txt">{% for x in a.preguntas_para_la_siguiente_visita %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+  </div>
+  {% endif %}
 
   <div class="fin">
     Informe generado desde el levantamiento de procesos.
