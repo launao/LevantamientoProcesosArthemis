@@ -147,14 +147,14 @@ function pintar() {
     <span class="lbl">Nota escrita (opcional)</span>
     <textarea id="nota" placeholder="Qué se ve en la foto, quién lo dijo, dónde fue…" style="min-height:70px"></textarea>
     <div class="flex" style="margin-top:8px;gap:8px">
-      <button class="btn sm" id="bNota">Guardar solo la nota</button>
+      <button class="btn" id="bNota">Guardar solo la nota</button>
       <span class="tiny" style="flex:1">O déjala escrita y se adjunta a la siguiente foto o audio.</span>
     </div>
   </div>
 
   <div class="flex" style="margin:18px 0 10px">
     <h3 style="font-size:14px;margin:0;flex:1">Guardado en el proceso</h3>
-    <button class="btn sm" id="bRefrescar" title="Actualizar">↻</button>
+    <button class="btn sm" id="bRefrescar" title="Actualizar">↻ Actualizar</button>
   </div>
   <div id="lista"></div>
 
@@ -164,9 +164,9 @@ function pintar() {
          style="position:absolute;width:1px;height:1px;opacity:0">
 
   <div class="acciones">
-    <button class="btn p" id="bFoto">📷 Foto</button>
-    <button class="btn" id="bGaleria">🖼</button>
-    <button class="btn" id="bVoz">🎙 Voz</button>
+    <button class="btn p" id="bFoto"><span class="ico">📷</span><span>Tomar foto</span></button>
+    <button class="btn" id="bGaleria"><span class="ico">🖼</span><span>Galería</span></button>
+    <button class="btn" id="bVoz"><span class="ico">🎙</span><span>Grabar voz</span></button>
   </div>`;
 
   const sc = document.getElementById('selCampo');

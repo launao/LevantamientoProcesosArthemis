@@ -853,13 +853,13 @@ function pintarGuiado(cont, todos, p) {
       <div class="guia-campo">${campoHTML(c, p.respuestas[c.id], true)}</div>
 
       <div class="pasos-pie">
-        <button class="btn" id="antes" ${S.idx === 0 ? 'disabled' : ''}>← Anterior</button>
-        <span class="tiny" style="flex:1;text-align:center">
-          ${c.obligatorio ? 'Esta pregunta es obligatoria' : 'Puede dejarla en blanco y seguir'}
+        <button class="btn grande" id="antes" ${S.idx === 0 ? 'disabled' : ''}>← Anterior</button>
+        <span class="aviso-campo">
+          ${c.obligatorio ? 'Esta pregunta hay que responderla' : 'Si no sabe, puede seguir y volver después'}
         </span>
         ${ultima
-          ? (ro ? '' : '<button class="btn p" id="finalizar">✈ Enviar el proceso</button>')
-          : '<button class="btn p" id="despues">Siguiente →</button>'}
+          ? (ro ? '' : '<button class="btn p grande" id="finalizar">✈ Enviar el proceso</button>')
+          : '<button class="btn p grande" id="despues">Siguiente →</button>'}
       </div>
     </div>
 
@@ -1018,10 +1018,10 @@ function campoHTML(c, v, grande) {
     ${grande ? '' : `<span class="lbl">${esc(c.etiqueta)}${c.obligatorio ? '<span class="req">*</span>' : ''}</span>`}
     ${ctrl}
     ${ro ? '' : `<div class="ftools">
-      <button class="btn sm" data-mic="${c.id}" title="Grabar lo que le respondan">🎙 Grabar</button>
-      <button class="btn sm" data-cam="${c.id}" title="Tomar foto">📷 Foto</button>
-      <button class="btn sm ic" data-file="${c.id}" title="Subir una imagen">🖼</button>
-      <button class="btn sm ic" data-qr="${c.id}" title="Capturar desde el celular en esta pregunta">📱</button>
+      <button class="btn accion" data-mic="${c.id}"><span class="ico">🎙</span> Grabar voz</button>
+      <button class="btn accion" data-cam="${c.id}"><span class="ico">📷</span> Tomar foto</button>
+      <button class="btn accion" data-file="${c.id}"><span class="ico">🖼</span> Subir imagen</button>
+      <button class="btn accion" data-qr="${c.id}"><span class="ico">📱</span> Usar el celular</button>
       <span class="rec-slot" data-recslot="${c.id}"></span></div>`}
     <div class="ev" data-ev="${c.id}"></div>
   </div>`;
@@ -1091,9 +1091,9 @@ function pasoHTML(r, i, ro, cid) {
         placeholder="¿Dónde lo registra?" list="sug-sist" ${ro}>
       <input type="text" data-k="tiempo" value="${esc(r.tiempo || '')}"
         placeholder="¿Cuánto tarda?" ${ro}>
-      <button class="btn sm ic ${hayDetalle ? 'con-detalle' : ''}" data-abrir="${cid}-${i}"
-        title="Explicar y desglosar esta actividad">${abierto ? '▾' : (hayDetalle ? `⋯${subs.length ? ' ' + subs.length : ''}` : '+')}</button>
-      ${ro ? '<span></span>' : `<button class="btn sm ic" data-delpaso="${i}" title="Quitar">×</button>`}
+      <button class="btn detalle ${hayDetalle ? 'con-detalle' : ''}" data-abrir="${cid}-${i}">
+        ${abierto ? '▾ Cerrar' : (hayDetalle ? `Detalle${subs.length ? ' · ' + subs.length : ''}` : '+ Detalle')}</button>
+      ${ro ? '<span></span>' : `<button class="btn quitar" data-delpaso="${i}" title="Quitar esta actividad">✕</button>`}
     </div>
 
     ${abierto ? `<div class="act-detalle">
@@ -1116,7 +1116,7 @@ function pasoHTML(r, i, ro, cid) {
             <span class="vi">${i + 1}.${j + 1}</span>
             <input type="text" data-sub="${j}" value="${esc(t.texto)}"
               placeholder="Ej: Verificar que la EPS esté activa" ${ro}>
-            ${ro ? '' : `<button class="btn sm ic" data-delsub="${i}-${j}" title="Quitar">×</button>`}
+            ${ro ? '' : `<button class="btn quitar" data-delsub="${i}-${j}" title="Quitar este pasito">✕</button>`}
           </div>
           <textarea data-subdet="${j}" class="sub-det" ${ro}
             placeholder="Detalle de este pasito (opcional)">${esc(t.detalle)}</textarea>
@@ -1132,10 +1132,10 @@ function pasoHTML(r, i, ro, cid) {
 /** Los mismos botones de evidencia, reutilizables en cualquier nivel. */
 function herramientasEvidencia(ref, queEs) {
   return `<div class="ftools">
-    <button class="btn sm ic" data-mic="${ref}" title="Grabar audio sobre ${queEs}">🎙</button>
-    <button class="btn sm ic" data-cam="${ref}" title="Tomar foto de ${queEs}">📷</button>
-    <button class="btn sm ic" data-file="${ref}" title="Subir imagen">🖼</button>
-    <button class="btn sm ic" data-qr="${ref}" title="Capturar desde el celular">📱</button>
+    <button class="btn accion" data-mic="${ref}" title="Grabar audio sobre ${queEs}"><span class="ico">🎙</span> Grabar</button>
+    <button class="btn accion" data-cam="${ref}" title="Tomar foto de ${queEs}"><span class="ico">📷</span> Foto</button>
+    <button class="btn accion" data-file="${ref}"><span class="ico">🖼</span> Subir</button>
+    <button class="btn accion" data-qr="${ref}"><span class="ico">📱</span> Celular</button>
     <span class="rec-slot" data-recslot="${ref}"></span>
   </div>`;
 }
