@@ -734,7 +734,7 @@ function vistaProceso(m) {
     <button class="btn sm" id="volver">← Procesos</button><div class="sp"></div>
     <span class="tiny" id="estadoGuardado"></span>
     ${ro ? '' : '<button class="btn sm" id="btnGuardar" title="Guardar ahora (Ctrl+S)">Guardar</button>'}
-    ${ro ? '' : '<button class="btn sm" id="btnIA" title="Que Claude analice este levantamiento">✨ Análisis</button>'}
+    ${esAdmin() ? '<button class="btn sm" id="btnIA" title="Que Claude analice este levantamiento">✨ Análisis</button>' : ''}
     ${p.informeUrl ? '<button class="btn sm" id="btnInforme" title="Ver y compartir el informe enviado">📄 Informe</button>' : ''}
     ${ro ? '' : '<button class="btn sm" id="btnHist" title="Ver y recuperar versiones anteriores">🕘 Historial</button>'}
     ${ro ? '' : '<button class="btn sm" id="btnQR">📱 Celular</button>'}
@@ -3304,7 +3304,7 @@ function pintarAnalisis(cuerpo, p, lista) {
         al proceso y aparecen en el mapa. Las demás se ignoran.</p>
       <div class="ia-conexiones">${l(c.conexiones).map((x, i) => `
         <label class="ia-conex">
-          <input type="checkbox" data-conex="${i}" ${esAdmin() ? '' : 'disabled'}
+          <input type="checkbox" data-conex="${i}"
             ${(c.conexiones_aprobadas || []).some(y => y.proceso === x.proceso) ? 'checked' : ''}>
           <span>
             <b>${x.direccion === 'antes' ? 'Viene de' : 'Pasa a'}: ${esc(x.proceso || '')}</b>
@@ -3314,13 +3314,12 @@ function pintarAnalisis(cuerpo, p, lista) {
         </label>`).join('')}</div>
     </section>` : ''}
 
-    ${esAdmin() && a.estado === 'propuesto' ? `<div class="ia-decidir">
+    ${a.estado === 'propuesto' ? `<div class="ia-decidir">
       <button class="btn" id="iaDescartar">Descartar</button>
       <button class="btn p right" id="iaAprobar">Aprobar y adjuntar</button>
     </div>` : ''}
 
     ${a.estado === 'aprobado' ? '<div class="aviso-ia ok">Aprobado: sale adjunto en el informe que se comparte.</div>' : ''}
-    ${!esAdmin() && a.estado === 'propuesto' ? '<div class="aviso-ia">Pendiente de que la coordinación lo revise.</div>' : ''}
 
     ${lista.length > 1 ? `<div class="tiny" style="margin-top:12px">Hay ${lista.length - 1} análisis anterior(es) de este proceso.</div>` : ''}`;
 

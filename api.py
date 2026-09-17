@@ -465,14 +465,14 @@ def ia_probar():
 
 
 @api.post("/procesos/<pid>/analizar")
-@puede_editar
+@rol_required("admin")
 def analizar_proceso(pid):
+    """Pedir un análisis gasta saldo de la cuenta de Anthropic, así que lo
+    hace únicamente quien responde por ese gasto."""
     p = D.row("SELECT * FROM procesos WHERE id=?", (pid,))
     if not p:
         return jsonify({"error": "no_existe"}), 404
     u = usuario_actual()
-    if not _mio(p, u):
-        return jsonify({"error": "no_es_tuyo"}), 403
 
     plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
     respuestas = D.jload(p["respuestas"], {})
@@ -506,7 +506,7 @@ def analizar_proceso(pid):
 
 
 @api.get("/procesos/<pid>/analisis")
-@login_required
+@rol_required("admin")
 def listar_analisis(pid):
     nombres = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM usuarios")}
     filas = D.rows("SELECT * FROM analisis WHERE proceso_id=? ORDER BY creado DESC", (pid,))
