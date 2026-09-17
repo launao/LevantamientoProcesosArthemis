@@ -2070,93 +2070,159 @@ function modalCompartir(p, d) {
    Un tablero por persona y unos pocos filtros. Se reparte arrastrando
    tarjetas de una columna a otra.
    ═══════════════════════════════════════════════════════════════ */
-const FILTROS_ASIG = [
-  { k: 'todos', n: 'Todos' },
-  { k: 'hoy', n: 'Hoy' },
-  { k: 'vencidos', n: 'Vencidos' },
-  { k: 'borrador', n: 'En borrador' },
-  { k: 'semana', n: 'Esta semana' },
-  { k: 'siguiente', n: 'Semana siguiente' }
+/* Los grupos en que se parte el trabajo de cada persona. El orden importa:
+   arriba lo que aprieta, abajo lo que puede esperar. */
+const GRUPOS_FECHA = [
+  { k: 'vencidos',  n: 'Vencidos',         abierto: true,  urgente: true },
+  { k: 'hoy',       n: 'Hoy',              abierto: true,  urgente: true },
+  { k: 'semana',    n: 'Esta semana',      abierto: true },
+  { k: 'siguiente', n: 'Semana siguiente', abierto: false },
+  { k: 'despues',   n: 'Más adelante',     abierto: false },
+  { k: 'sinfecha',  n: 'Sin fecha',        abierto: false }
+];
+
+const GRUPOS_ESTADO = [
+  { k: 'pendiente',   n: 'En borrador', abierto: true },
+  { k: 'en_curso',    n: 'En curso',    abierto: true },
+  { k: 'en_revision', n: 'Enviados',    abierto: false },
+  { k: 'aprobado',    n: 'Aprobados',   abierto: false }
 ];
 
 function vistaAsignacion(m) {
-  S.filtroAsig = S.filtroAsig || 'todos';
-  const ps = filtrarAsignacion(S.procesos, S.filtroAsig);
+  S.agrupar = S.agrupar || 'fecha';
+  S.cerradosAsig = S.cerradosAsig || new Set();
+  const grupos = S.agrupar === 'fecha' ? GRUPOS_FECHA : GRUPOS_ESTADO;
 
   m.innerHTML = `
   <div class="topbar"><h1>Asignación</h1><div class="sp"></div>
     <div class="tabs">
-      ${FILTROS_ASIG.map(f => {
-        const n = filtrarAsignacion(S.procesos, f.k).length;
-        return `<button class="tab ${S.filtroAsig === f.k ? 'on' : ''}" data-filtro="${f.k}">
-          ${f.n}${n ? ` <span class="tiny">${n}</span>` : ''}</button>`;
-      }).join('')}
+      <button class="tab ${S.agrupar === 'fecha' ? 'on' : ''}" data-agrupar="fecha">Por fecha</button>
+      <button class="tab ${S.agrupar === 'estado' ? 'on' : ''}" data-agrupar="estado">Por estado</button>
     </div>
+    <button class="btn sm" id="plegarTodo">${S.cerradosAsig.size ? 'Abrir todo' : 'Cerrar todo'}</button>
   </div>
 
   ${esAdmin()
-    ? '<div class="tiny" style="margin-bottom:10px">Arrastra una tarjeta de una columna a otra para reasignarla.</div>'
+    ? '<div class="tiny" style="margin-bottom:12px">Arrastra una tarjeta a la columna de otra persona para reasignarla.</div>'
     : '<div class="banner">Solo el administrador reparte los procesos.</div>'}
 
-  <div id="asigCuerpo"></div>`;
+  <div class="tablero">
+    ${columnasPersonas().map(col => columnaPersona(col, grupos)).join('')}
+  </div>`;
 
-  m.querySelectorAll('[data-filtro]').forEach(b => b.onclick = () => {
-    S.filtroAsig = b.dataset.filtro; vistaAsignacion(m);
+  m.querySelectorAll('[data-agrupar]').forEach(b => b.onclick = () => {
+    S.agrupar = b.dataset.agrupar;
+    S.cerradosAsig = new Set(); S.tocadoAsig = false;
+    vistaAsignacion(m);
   });
 
-  tableroPersonas(document.getElementById('asigCuerpo'), ps, m);
+  document.getElementById('plegarTodo').onclick = () => {
+    S.tocadoAsig = true;
+    if (S.cerradosAsig.size) S.cerradosAsig = new Set();
+    else columnasPersonas().forEach(c => grupos.forEach(g => S.cerradosAsig.add(c.id + '|' + g.k)));
+    vistaAsignacion(m);
+  };
+
+  m.querySelectorAll('[data-plegar]').forEach(h => h.onclick = e => {
+    if (e.target.closest('a')) return;
+    if (!S.tocadoAsig) {
+      // Al primer clic se congela el estado actual, para no reabrir de golpe
+      // todo lo que venía plegado.
+      const grupos2 = S.agrupar === 'fecha' ? GRUPOS_FECHA : GRUPOS_ESTADO;
+      columnasPersonas().forEach(c => grupos2.forEach(g => {
+        if (g.abierto === false) S.cerradosAsig.add(c.id + '|' + g.k);
+      }));
+      S.tocadoAsig = true;
+    }
+    const k = h.dataset.plegar;
+    S.cerradosAsig.has(k) ? S.cerradosAsig.delete(k) : S.cerradosAsig.add(k);
+    vistaAsignacion(m);
+  });
+
+  conectarArrastre(m);
 }
 
-/** Los recortes de tiempo se calculan sobre semanas que empiezan el lunes. */
-function filtrarAsignacion(procesos, filtro) {
-  if (filtro === 'todos') return procesos;
-  if (filtro === 'borrador') return procesos.filter(p => (p.estado || 'pendiente') === 'pendiente');
+function columnasPersonas() {
+  const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
+  return [{ id: '', nombre: 'Sin asignar' }].concat(gente);
+}
+
+function columnaPersona(col, grupos) {
+  const suyos = S.procesos.filter(p => (p.responsable || '') === col.id);
+  const av = suyos.length ? Math.round(suyos.reduce((t, p) => t + avance(p), 0) / suyos.length) : 0;
+  const persona = S.equipo.find(u => u.id === col.id);
+  const enMora = suyos.filter(p => grupoDe(p, 'fecha') === 'vencidos').length;
+
+  return `<div class="col" data-col="${col.id}">
+    <div class="col-cab">
+      ${persona ? puntoPresencia(persona) : ''}
+      <b>${esc(col.nombre)}</b>
+      <span class="tiny">${suyos.length}${suyos.length ? ` · ${av}%` : ''}</span>
+    </div>
+    ${enMora ? `<div class="col-mora">${enMora} vencido(s)</div>` : ''}
+
+    <div class="col-cuerpo" data-drop="${col.id}">
+      ${suyos.length ? grupos.map(g => {
+        const delGrupo = suyos.filter(p => grupoDe(p, S.agrupar) === g.k)
+          .sort((a, b) => (a.fechaLimite || '9999').localeCompare(b.fechaLimite || '9999'));
+        if (!delGrupo.length) return '';
+        const clave = col.id + '|' + g.k;
+        // La primera vez se decide por el grupo; después manda lo que la
+        // persona haya plegado o desplegado.
+        const cerrado = S.tocadoAsig
+          ? S.cerradosAsig.has(clave)
+          : g.abierto === false;
+        return `<section class="acord ${cerrado ? 'cerrado' : ''} ${g.urgente ? 'urge' : ''}">
+          <header data-plegar="${clave}">
+            <span class="fl">${cerrado ? '▸' : '▾'}</span>
+            <span class="nom">${esc(g.n)}</span>
+            <span class="cuenta">${delGrupo.length}</span>
+          </header>
+          <div class="acord-cuerpo">${delGrupo.map(p => tarjetaTablero(p)).join('')}</div>
+        </section>`;
+      }).join('') : '<div class="col-vacia">Nada asignado</div>'}
+    </div>
+  </div>`;
+}
+
+/** En qué cajón cae un proceso, según cómo se esté agrupando. */
+function grupoDe(p, criterio) {
+  if (criterio === 'estado') return p.estado || 'pendiente';
+
+  const f = (p.fechaLimite || '').slice(0, 10);
+  if (!f) return 'sinfecha';
 
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const lunes = new Date(hoy);
   lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
   const finSemana = new Date(lunes); finSemana.setDate(lunes.getDate() + 6);
-  const lunesSig = new Date(lunes); lunesSig.setDate(lunes.getDate() + 7);
-  const finSig = new Date(lunesSig); finSig.setDate(lunesSig.getDate() + 6);
+  const finSig = new Date(lunes); finSig.setDate(lunes.getDate() + 13);
   const iso = d => d.toISOString().slice(0, 10);
 
-  return procesos.filter(p => {
-    const f = (p.fechaLimite || '').slice(0, 10);
-    if (!f) return false;
-    if (filtro === 'hoy') return f === iso(hoy);
-    if (filtro === 'vencidos') return f < iso(hoy) && p.estado !== 'aprobado';
-    if (filtro === 'semana') return f >= iso(lunes) && f <= iso(finSemana);
-    if (filtro === 'siguiente') return f >= iso(lunesSig) && f <= iso(finSig);
-    return true;
-  });
+  if (f < iso(hoy)) return p.estado === 'aprobado' ? 'despues' : 'vencidos';
+  if (f === iso(hoy)) return 'hoy';
+  if (f <= iso(finSemana)) return 'semana';
+  if (f <= iso(finSig)) return 'siguiente';
+  return 'despues';
 }
 
-function tableroPersonas(cuerpo, ps, m) {
-  const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
-  const columnas = [{ id: '', nombre: 'Sin asignar' }].concat(gente);
-
-  cuerpo.innerHTML = `<div class="tablero">
-    ${columnas.map(col => {
-      const suyos = ps.filter(p => (p.responsable || '') === col.id);
-      const av = suyos.length ? Math.round(suyos.reduce((t, p) => t + avance(p), 0) / suyos.length) : 0;
-      const persona = gente.find(u => u.id === col.id);
-      return `<div class="col" data-col="${col.id}">
-        <div class="col-cab">
-          ${persona ? puntoPresencia(persona) : ''}
-          <b>${esc(col.nombre)}</b>
-          <span class="tiny">${suyos.length}${suyos.length ? ` · ${av}%` : ''}</span>
-        </div>
-        <div class="col-cuerpo" data-drop="${col.id}">
-          ${suyos.sort((a, b) => (a.fechaLimite || '9999').localeCompare(b.fechaLimite || '9999'))
-            .map(p => tarjetaTablero(p)).join('') || '<div class="col-vacia">Nada aquí</div>'}
-        </div>
-      </div>`;
-    }).join('')}
+function tarjetaTablero(p) {
+  return `<div class="tarjeta" data-id="${p.id}">
+    <a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
+    <div class="tiny">${esc(p.area || 'Sin área')}</div>
+    <div class="flex wrap" style="margin-top:8px;gap:8px">
+      ${textoPlazo(p.fechaLimite).html}
+      <span class="pill ${p.estado || 'pendiente'}" style="font-size:12.5px;padding:3px 10px">
+        ${esc(etiquetaEstado(p.estado))}</span>
+    </div>
+    <div class="bar" style="margin-top:8px"><i style="width:${avance(p)}%"></i></div>
   </div>`;
+}
 
+function conectarArrastre(m) {
   if (!esAdmin()) return;
 
-  cuerpo.querySelectorAll('.tarjeta').forEach(t => {
+  m.querySelectorAll('.tarjeta').forEach(t => {
     t.draggable = true;
     t.ondragstart = e => {
       e.dataTransfer.setData('text/plain', t.dataset.id);
@@ -2165,7 +2231,7 @@ function tableroPersonas(cuerpo, ps, m) {
     t.ondragend = () => t.classList.remove('arrastrando');
   });
 
-  cuerpo.querySelectorAll('[data-drop]').forEach(z => {
+  m.querySelectorAll('[data-drop]').forEach(z => {
     z.ondragover = e => { e.preventDefault(); z.classList.add('encima'); };
     z.ondragleave = () => z.classList.remove('encima');
     z.ondrop = async e => {
@@ -2175,18 +2241,6 @@ function tableroPersonas(cuerpo, ps, m) {
       vistaAsignacion(m);
     };
   });
-}
-
-function tarjetaTablero(p) {
-  return `<div class="tarjeta" data-id="${p.id}">
-    <a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
-    <div class="tiny">${esc(p.area || 'Sin área')}</div>
-    <div class="flex" style="margin-top:6px;gap:6px">
-      ${textoPlazo(p.fechaLimite).html}
-      <span class="pill ${p.estado || 'pendiente'}" style="font-size:10.5px">${esc(etiquetaEstado(p.estado))}</span>
-    </div>
-    <div class="bar" style="margin-top:6px"><i style="width:${avance(p)}%"></i></div>
-  </div>`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
