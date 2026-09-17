@@ -486,15 +486,22 @@ def analizar_proceso(pid):
     otros = D.rows("SELECT id, nombre, area FROM procesos "
                    "WHERE COALESCE(eliminado,0)=0 AND id<>?", (pid,))
     procesos = {x["id"]: x["nombre"] for x in otros}
-    evidencias = D.rows("SELECT tipo, nota FROM evidencias WHERE proceso_id=?", (pid,))
+    evidencias = D.rows("SELECT tipo, nota, campo_id, duracion, media_id "
+                        "FROM evidencias WHERE proceso_id=? ORDER BY creado", (pid,))
 
     texto = ia.armar_texto(p, plantilla, respuestas, nombres, procesos, evidencias)
     catalogo = [f"{x['nombre']} ({x['area'] or 'sin área'})" for x in otros]
+    imagenes = _imagenes_para_ia(pid, plantilla, evidencias)
 
     try:
-        analisis, modelo, uso = ia.analizar(texto, catalogo)
+        analisis, modelo, uso = ia.analizar(texto, catalogo, imagenes)
     except ia.IAError as e:
-        return jsonify({"error": e.codigo, "detalle": e.detalle}), 502
+        # Se devuelve todo lo que se sabe del fallo, incluido lo que Claude
+        # alcanzó a escribir: sin eso no hay forma de saber qué corregir.
+        auditar("analisis_fallido", "proceso", pid, f"{e.codigo}: {e.detalle[:100]}")
+        return jsonify({"error": e.codigo, "detalle": e.detalle,
+                        "crudo": (e.crudo or "")[:4000], "contexto": e.extra,
+                        "tamanoEnviado": len(texto)}), 502
 
     aid = _nuevo_id("an_")
     D.execute("INSERT INTO analisis (id, proceso_id, contenido, modelo, estado, pedido_por) "
@@ -504,7 +511,55 @@ def analizar_proceso(pid):
             f"{uso['entrada']}+{uso['salida']} tokens")
 
     return jsonify({"ok": True, "id": aid, "analisis": analisis,
-                    "modelo": modelo, "uso": uso, "avance": avance})
+                    "modelo": modelo, "uso": uso, "avance": avance,
+                    "recuperado": bool(analisis.get("_recuperado")),
+                    "reparado": bool(analisis.get("_reparado")),
+                    "fotosEnviadas": len(imagenes),
+                    "audios": sum(1 for e in evidencias if e["tipo"] == "audio")})
+
+
+def _imagenes_para_ia(pid, plantilla, evidencias):
+    """Prepara las fotos del proceso para mandárselas a Claude.
+
+    Se reducen de tamaño y se etiquetan con la pregunta a la que pertenecen.
+    Si hay más de las que caben, se toman las primeras: fueron las que la
+    persona consideró importante mostrar primero.
+    """
+    etiquetas = {c["id"]: c["etiqueta"]
+                 for s in plantilla.get("secciones", []) for c in s.get("campos", [])}
+
+    def donde(campo):
+        if not campo:
+            return "general"
+        partes = campo.split(":")
+        base = etiquetas.get(partes[0], partes[0])
+        if len(partes) == 3:
+            return f"{base}, sub-actividad {int(partes[1])+1}.{int(partes[2])+1}"
+        if len(partes) == 2:
+            return f"{base}, actividad {int(partes[1])+1}"
+        return base
+
+    fotos = [e for e in evidencias if e["tipo"] == "foto" and e["media_id"]][:ia.MAX_IMAGENES]
+    salida = []
+    for e in fotos:
+        m = D.row("SELECT content_type, data, ruta FROM media WHERE id=?", (e["media_id"],))
+        if not m:
+            continue
+        if m.get("ruta"):
+            try:
+                with open(m["ruta"], "rb") as fh:
+                    datos = fh.read()
+            except OSError:
+                continue
+        else:
+            datos = D.to_bytes(m["data"])
+        if not datos:
+            continue
+        datos, ctype = ia.reducir_imagen(datos, m["content_type"] or "image/jpeg")
+        if ctype not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+            continue
+        salida.append({"etiqueta": donde(e["campo_id"]), "datos": datos, "tipo": ctype})
+    return salida
 
 
 @api.get("/procesos/<pid>/analisis")

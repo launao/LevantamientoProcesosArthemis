@@ -3233,24 +3233,27 @@ async function modalAnalisis(p) {
     btn.onclick = async () => {
       btn.disabled = true;
       btn.textContent = 'Analizando… puede tardar un minuto';
-      cuerpo.innerHTML = '<div class="mut">Claude está leyendo el levantamiento completo: respuestas, actividades, sub-actividades y notas. No cierres esta ventana.</div>';
+      const ev = p.evidencias || [];
+      const nf = ev.filter(e => e.tipo === 'foto').length;
+      const na = ev.filter(e => e.tipo === 'audio').length;
+      cuerpo.innerHTML = `<div class="mut">Claude está leyendo el levantamiento completo:
+        respuestas, actividades, sub-actividades y notas${nf ? `, y mirando ${Math.min(nf, 8)} de las ${nf} foto(s)` : ''}.
+        ${na ? `<br><br>Las ${na} nota(s) de voz no las puede escuchar: le digo dónde están y en qué
+        pregunta, para que te señale cuáles conviene que oigas tú.` : ''}
+        <br><br>No cierres esta ventana.</div>`;
       try {
         await api('/procesos/' + p.id + '/analizar', { method: 'POST' });
         await cargar();
         toast('Análisis listo');
       } catch (e) {
-        const c = (e.data && e.data.error) || '';
-        const msg = {
-          sin_llave: 'Falta configurar la llave de Claude en Ajustes.',
-          llave_invalida: 'La llave de Claude no es válida. Revísala en Ajustes.',
-          sin_saldo: 'La cuenta de Anthropic no tiene saldo.',
-          limite_alcanzado: 'Se alcanzó el límite de peticiones. Espera un momento.',
-          sin_conexion: 'El servidor no pudo comunicarse con Claude.',
-          muy_vacio: `El levantamiento va en ${(e.data || {}).avance || 0}%. Con tan poco, el análisis no diría nada útil.`,
-          respuesta_ilegible: 'Claude devolvió algo que no se pudo interpretar. Intenta otra vez.'
-        }[c] || 'No se pudo generar el análisis.';
-        cuerpo.innerHTML = `<div class="aviso-ia error">${esc(msg)}
-          ${(e.data && e.data.detalle) ? `<div class="tiny" style="margin-top:6px">${esc(e.data.detalle)}</div>` : ''}</div>`;
+        cuerpo.innerHTML = errorAnalisis(e);
+        const ver = cuerpo.querySelector('#verCrudo');
+        if (ver) ver.onclick = () => {
+          const caja = cuerpo.querySelector('#crudo');
+          caja.classList.toggle('oculto');
+          ver.textContent = caja.classList.contains('oculto')
+            ? 'Ver lo que devolvió' : 'Ocultar';
+        };
       }
       btn.disabled = false;
       btn.textContent = '✨ Analizar de nuevo';
@@ -3260,13 +3263,65 @@ async function modalAnalisis(p) {
   });
 }
 
+/** El mensaje de error dice qué pasó, por qué, y deja ver la respuesta cruda. */
+function errorAnalisis(e) {
+  const d = (e && e.data) || {};
+  const c = d.error || '';
+  const ctx = d.contexto || {};
+
+  const titulos = {
+    sin_llave: 'Falta la llave de Claude',
+    llave_invalida: 'La llave de Claude no es válida',
+    sin_saldo: 'La cuenta de Anthropic no tiene saldo',
+    limite_alcanzado: 'Se alcanzó el límite de peticiones',
+    sin_conexion: 'El servidor no pudo comunicarse con Claude',
+    error_api: 'Anthropic devolvió un error',
+    muy_vacio: 'El levantamiento está muy vacío para analizarlo',
+    respuesta_vacia: 'Claude no devolvió nada',
+    respuesta_ilegible: 'La respuesta no se pudo interpretar'
+  };
+
+  const acciones = {
+    sin_llave: 'Configúrala en Ajustes → Análisis con Claude.',
+    llave_invalida: 'Revísala en Ajustes y usa el botón Probar conexión.',
+    sin_saldo: 'Carga saldo en console.anthropic.com → Billing.',
+    limite_alcanzado: 'Espera un minuto y vuelve a intentarlo.',
+    sin_conexion: 'Revisa que Railway tenga salida a internet.',
+    muy_vacio: `Va en ${d.avance || 0}%. Complétalo un poco más y vuelve.`
+  };
+
+  const detalleTecnico = [
+    ctx.stop_reason ? `motivo de corte: ${ctx.stop_reason}` : '',
+    ctx.modelo ? `modelo: ${ctx.modelo}` : '',
+    ctx.tokens_salida ? `respondió ${ctx.tokens_salida} tokens` : '',
+    d.tamanoEnviado ? `se le enviaron ${Math.round(d.tamanoEnviado / 1000)} mil caracteres` : ''
+  ].filter(Boolean).join(' · ');
+
+  return `<div class="aviso-ia error">
+    <b>${esc(titulos[c] || 'No se pudo generar el análisis')}</b>
+    ${d.detalle ? `<div style="margin-top:7px">${esc(d.detalle)}</div>` : ''}
+    ${acciones[c] ? `<div style="margin-top:7px">${esc(acciones[c])}</div>` : ''}
+    ${detalleTecnico ? `<div class="tiny" style="margin-top:9px">${esc(detalleTecnico)}</div>` : ''}
+    ${d.crudo ? `<div style="margin-top:10px">
+      <button class="btn sm" id="verCrudo">Ver lo que devolvió</button>
+      <pre id="crudo" class="crudo oculto">${esc(d.crudo)}</pre>
+    </div>` : ''}
+  </div>`;
+}
+
 function pintarAnalisis(cuerpo, p, lista) {
   if (!lista.length) {
+    const ev = p.evidencias || [];
+    const nf = ev.filter(e => e.tipo === 'foto').length;
+    const na = ev.filter(e => e.tipo === 'audio').length;
     cuerpo.innerHTML = `<div class="aviso-ia">
-      Claude leerá todo lo levantado y devolverá un documento aparte: resumen, el paso a
-      paso ordenado, dolores con su impacto, propuestas de mejora y de automatización,
-      riesgos, y con qué otros procesos parece conectar.
-      <br><br>Nada de eso toca el levantamiento original. Tú decides qué se aprueba.
+      Claude leerá todo lo levantado —respuestas, actividades, sub-actividades y notas—
+      ${nf ? `y <b>mirará las fotos</b> para leer los formatos y pantallas que haya ahí` : ''}.
+      Devolverá un documento aparte: resumen, paso a paso ordenado, dolores con su impacto,
+      propuestas de mejora y automatización, riesgos, y con qué otros procesos conecta.
+      ${na ? `<br><br><b>Sobre las ${na} nota(s) de voz:</b> no las puede escuchar. Le digo
+        dónde está cada una para que te señale cuáles vale la pena que oigas tú.` : ''}
+      <br><br>Nada de esto toca el levantamiento original. Tú decides qué se aprueba.
     </div>`;
     return;
   }
@@ -3274,6 +3329,7 @@ function pintarAnalisis(cuerpo, p, lista) {
   const a = lista[0];
   const c = a.contenido || {};
   const l = x => Array.isArray(x) ? x : [];
+  const incompleto = c._recuperado || c._reparado;
 
   const bloque = (titulo, contenido) => contenido
     ? `<section class="ia-bloque"><h4>${titulo}</h4>${contenido}</section>` : '';
@@ -3285,6 +3341,12 @@ function pintarAnalisis(cuerpo, p, lista) {
       <span class="tiny">${esc(fechaLarga(a.creado))} · pedido por ${esc(a.pedidoPor)}
         ${a.aprobadoPor ? ' · revisado por ' + esc(a.aprobadoPor) : ''}</span>
     </div>
+
+    ${incompleto ? `<div class="aviso-ia" style="margin-bottom:16px">
+      ${c._recuperado
+        ? 'La respuesta llegó cortada por su longitud y se rescató la parte válida. Puede faltarle el final; si quieres el análisis completo, vuelve a pedirlo.'
+        : 'Hubo que pedirle a Claude que corrigiera el formato. El contenido es el mismo.'}
+    </div>` : ''}
 
     ${bloque('Resumen', c.resumen ? `<p>${esc(c.resumen)}</p>` : '')}
 
@@ -3319,6 +3381,20 @@ function pintarAnalisis(cuerpo, p, lista) {
           <div class="tiny">${esc(x.que_haria_el_sistema || '')}</div>
           ${x.requisito ? `<div class="ia-obs">Hace falta: ${esc(x.requisito)}</div>` : ''}
         </li>`).join('')}</ul>` : '')}
+
+    ${l(c.hallazgos_en_fotos).length ? `<section class="ia-bloque">
+      <h4>Lo que vio en las fotos</h4>
+      <ul class="ia-lista">${l(c.hallazgos_en_fotos).map(x =>
+        `<li><b>Foto ${esc(x.foto || '?')}</b> — ${esc(x.observacion || '')}</li>`).join('')}</ul>
+    </section>` : ''}
+
+    ${l(c.audios_por_escuchar).length ? `<section class="ia-bloque">
+      <h4>Audios que deberías escuchar</h4>
+      <p class="tiny">Claude no puede oírlos. Estos son los puntos donde la respuesta
+        probablemente está en la grabación y no en lo escrito.</p>
+      <ul class="ia-lista">${l(c.audios_por_escuchar).map(x =>
+        `<li><b>${esc(x.donde || '')}</b><div class="tiny">${esc(x.por_que || '')}</div></li>`).join('')}</ul>
+    </section>` : ''}
 
     ${bloque('Riesgos', l(c.riesgos).length
       ? `<ul class="ia-lista">${l(c.riesgos).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '')}

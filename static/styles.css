@@ -591,3 +591,7 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
   background:color-mix(in srgb,var(--bad) 9%,transparent);border-radius:10px;
   padding:14px 16px;margin-top:14px}
 .cd-et{font-size:13.5px;letter-spacing:.8px;text-transform:uppercase;font-weight:700;color:var(--bad)}
+.crudo{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px;
+  font-size:12.5px;line-height:1.5;max-height:280px;overflow:auto;white-space:pre-wrap;
+  word-break:break-word;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.crudo.oculto{display:none}

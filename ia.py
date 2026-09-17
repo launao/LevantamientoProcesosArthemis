@@ -10,6 +10,8 @@ Lo que NO hace: tocar el levantamiento original. El análisis vive aparte
 y solo entra al proceso si alguien lo aprueba. La máquina propone; la
 persona que conoce la clínica decide.
 """
+import base64
+import io
 import json
 import os
 import re
@@ -21,16 +23,28 @@ from sanitizar import a_texto_plano
 
 API_URL = "https://api.anthropic.com/v1/messages"
 MODELO_DEFECTO = os.environ.get("CLAUDE_MODELO", "claude-sonnet-5")
-TIMEOUT = 120
+TIMEOUT = 180
+
+# Cuántas fotos se le muestran. Cada imagen cuesta tokens; ocho suele ser
+# más que suficiente para entender un formato en papel o una pantalla, y
+# mantiene el costo por proceso en centavos.
+MAX_IMAGENES = int(os.environ.get("CLAUDE_MAX_IMAGENES", "8"))
+LADO_MAX = 1024          # se reducen antes de enviarlas
 
 
 class IAError(Exception):
-    """Falla al pedir o interpretar el análisis."""
+    """Falla al pedir o interpretar el análisis.
 
-    def __init__(self, codigo, detalle=""):
+    Lleva siempre el detalle y, cuando existe, lo que Claude devolvió tal
+    cual. Un error que solo dice "no se pudo" obliga a adivinar.
+    """
+
+    def __init__(self, codigo, detalle="", crudo="", extra=None):
         super().__init__(codigo)
         self.codigo = codigo
         self.detalle = detalle
+        self.crudo = crudo
+        self.extra = extra or {}
 
 
 # ── La llave ────────────────────────────────────────────────────────────────
@@ -124,15 +138,67 @@ def armar_texto(proceso, plantilla, respuestas, nombres, procesos, evidencias):
             partes.extend(lineas)
             partes.append("")
 
-    fotos = sum(1 for e in evidencias if e["tipo"] == "foto")
-    audios = sum(1 for e in evidencias if e["tipo"] == "audio")
-    notas = [a_texto_plano(e["nota"]) for e in evidencias
-             if e["tipo"] == "nota" and e.get("nota")]
-    partes.append(f"## Evidencia recogida\n- {fotos} foto(s), {audios} nota(s) de voz")
+    # La evidencia se lista diciendo a qué pregunta o actividad pertenece:
+    # una foto suelta no dice nada, "la foto del formato que llenan en el
+    # paso 2" sí.
+    etiquetas = {c["id"]: c["etiqueta"]
+                 for s2 in plantilla.get("secciones", []) for c in s2.get("campos", [])}
+
+    def donde(campo):
+        if not campo:
+            return "general"
+        partes_campo = campo.split(":")
+        base = etiquetas.get(partes_campo[0], partes_campo[0])
+        if len(partes_campo) == 3:
+            return f"{base}, sub-actividad {int(partes_campo[1])+1}.{int(partes_campo[2])+1}"
+        if len(partes_campo) == 2:
+            return f"{base}, actividad {int(partes_campo[1])+1}"
+        return base
+
+    fotos = [e for e in evidencias if e["tipo"] == "foto"]
+    audios = [e for e in evidencias if e["tipo"] == "audio"]
+    notas = [e for e in evidencias if e["tipo"] == "nota" and e.get("nota")]
+
+    partes.append("## Evidencia recogida en campo")
+    if fotos:
+        partes.append(f"- {len(fotos)} foto(s). Las que te adjunto van al final, "
+                      "numeradas y con la pregunta a la que pertenecen.")
+    if audios:
+        partes.append(f"- {len(audios)} nota(s) de voz que NO puedes escuchar:")
+        for e in audios:
+            seg = e.get("duracion") or 0
+            partes.append(f"    · audio de {seg // 60}:{seg % 60:02d} en «{donde(e.get('campo_id'))}»")
+        partes.append("    Si el análisis de alguno de esos puntos queda flojo por no "
+                      "haberlos oído, dilo en 'audios_por_escuchar'.")
     if notas:
-        partes.append("- Notas escritas en campo: " + " / ".join(notas))
+        for e in notas:
+            partes.append(f"- Nota escrita en «{donde(e.get('campo_id'))}»: "
+                          f"{a_texto_plano(e['nota'])}")
+    if not (fotos or audios or notas):
+        partes.append("- Ninguna. El levantamiento es solo texto.")
 
     return "\n".join(partes)
+
+
+def reducir_imagen(datos, ctype):
+    """Baja la resolución antes de enviarla: una foto de celular a tamaño
+    completo cuesta el triple de tokens y no se entiende mejor."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return datos, ctype
+    try:
+        img = Image.open(io.BytesIO(datos))
+        img = img.convert("RGB")
+        if max(img.size) > LADO_MAX:
+            escala = LADO_MAX / max(img.size)
+            img = img.resize((int(img.width * escala), int(img.height * escala)),
+                             Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=80, optimize=True)
+        return buf.getvalue(), "image/jpeg"
+    except Exception:
+        return datos, ctype
 
 
 SISTEMA = """Eres un analista de procesos con experiencia en instituciones de salud \
@@ -152,6 +218,10 @@ Quien lee esto coordina una clínica, no compra metodologías.
 paciente" sirve; "implementar una solución de gestión documental" no sirve.
 - Si el levantamiento está muy incompleto, dilo con franqueza en 'calidad' en vez de \
 producir un análisis bonito sobre nada.
+- Las fotos son parte del levantamiento, no decoración: léelas. Un formato en papel \
+fotografiado dice qué campos se llenan a mano, y eso casi nunca está escrito.
+- No puedes escuchar las notas de voz. Nunca supongas qué dicen. Si un punto queda \
+flojo porque la respuesta está en un audio, señálalo en 'audios_por_escuchar'.
 
 Respondes ÚNICAMENTE con un objeto JSON válido, sin texto antes ni después y sin \
 marcas de código. Esta es la forma exacta:
@@ -177,6 +247,12 @@ marcas de código. Esta es la forma exacta:
     {"propuesta": "...", "que_haria_el_sistema": "...", "requisito": "qué hace falta para poder hacerlo"}
   ],
   "riesgos": ["..."],
+  "hallazgos_en_fotos": [
+    {"foto": 1, "observacion": "qué se ve ahí que no estaba escrito, o que lo contradice"}
+  ],
+  "audios_por_escuchar": [
+    {"donde": "la pregunta o actividad donde está", "por_que": "qué esperas que aclare"}
+  ],
   "conexiones": [
     {"proceso": "nombre exacto de la lista de procesos existentes, o el nombre tal como lo mencionaron",
      "direccion": "antes | despues",
@@ -190,12 +266,14 @@ Las listas pueden ir vacías si no hay nada que decir. Prefiere tres cosas buena
 diez de relleno."""
 
 
-def _pedir(llave, modelo, prompt):
+def _pedir(llave, modelo, contenido, max_tokens=8000):
+    if isinstance(contenido, str):
+        contenido = [{"type": "text", "text": contenido}]
     cuerpo = json.dumps({
         "model": modelo,
-        "max_tokens": 4000,
+        "max_tokens": max_tokens,
         "system": SISTEMA,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": contenido}],
     }).encode("utf-8")
 
     req = urllib.request.Request(API_URL, data=cuerpo, method="POST", headers={
@@ -225,26 +303,103 @@ def _pedir(llave, modelo, prompt):
         raise IAError("error_api", str(e))
 
 
-def _extraer_json(texto):
+def _cierres(prefijo):
+    """Qué llaves y corchetes quedaron abiertos en este trozo."""
+    pila = []
+    en_cadena = escapado = False
+    for ch in prefijo:
+        if escapado:
+            escapado = False
+        elif ch == "\\":
+            escapado = True
+        elif ch == '"':
+            en_cadena = not en_cadena
+        elif not en_cadena:
+            if ch in "{[":
+                pila.append(ch)
+            elif ch in "}]" and pila:
+                pila.pop()
+    if en_cadena:
+        return None                       # cortado dentro de una cadena
+    return "".join("}" if c == "{" else "]" for c in reversed(pila))
+
+
+def _cerrar_json(t):
+    """Rescata un JSON truncado.
+
+    Se va recortando desde el final hasta dar con un punto donde lo que
+    queda, más los cierres que falten, sea válido. Se pierde la cola pero
+    se salva el análisis, que suele traer lo importante al principio.
+    """
+    t = t.rstrip()
+    intentos = 0
+    for i in range(len(t) - 1, 0, -1):
+        if t[i] not in '}]"0123456789eslu':       # fin de valor plausible
+            continue
+        intentos += 1
+        if intentos > 4000:
+            break
+        trozo = re.sub(r",\s*$", "", t[:i + 1])
+        cierre = _cierres(trozo)
+        if cierre is None:
+            continue
+        try:
+            datos = json.loads(trozo + cierre)
+            if isinstance(datos, dict) and datos:
+                return trozo + cierre
+        except ValueError:
+            continue
+    return ""
+
+
+def _extraer_json(texto, contexto=None):
     """Claude a veces enmarca el JSON aunque se le pida que no. Se limpia."""
+    contexto = contexto or {}
     t = (texto or "").strip()
+    if not t:
+        raise IAError("respuesta_vacia",
+                      "Claude no devolvió texto. " + _pista(contexto),
+                      "", contexto)
+
     t = re.sub(r"^```(?:json)?\s*", "", t)
     t = re.sub(r"\s*```$", "", t)
-    try:
-        return json.loads(t)
-    except ValueError:
-        pass
-    ini, fin = t.find("{"), t.rfind("}")
-    if ini >= 0 and fin > ini:
+
+    for candidato in (t, t[t.find("{"): t.rfind("}") + 1] if "{" in t else "",
+                      _cerrar_json(t)):
+        if not candidato:
+            continue
         try:
-            return json.loads(t[ini:fin + 1])
+            datos = json.loads(candidato)
+            if isinstance(datos, dict):
+                if candidato != t:
+                    datos["_recuperado"] = True
+                return datos
         except ValueError:
-            pass
-    raise IAError("respuesta_ilegible", t[:300])
+            continue
+
+    raise IAError("respuesta_ilegible", _pista(contexto), t, contexto)
 
 
-def analizar(texto_proceso, lista_procesos, modelo=None):
-    """Devuelve (analisis, modelo, uso)."""
+def _pista(contexto):
+    """Traduce el motivo técnico a algo que se pueda actuar."""
+    razon = contexto.get("stop_reason")
+    if razon == "max_tokens":
+        return ("La respuesta se cortó por llegar al límite de longitud: el proceso "
+                "es muy extenso. Vuelve a intentarlo; si se repite, reduce el detalle "
+                "de las actividades o analiza por partes.")
+    if razon == "refusal":
+        return "Claude se negó a responder sobre este contenido."
+    if razon in ("pause_turn", "tool_use"):
+        return f"La respuesta terminó de forma inesperada ({razon})."
+    return ("Devolvió texto que no era el JSON esperado. Suele resolverse "
+            "intentando de nuevo.")
+
+
+def analizar(texto_proceso, lista_procesos, imagenes=None, modelo=None):
+    """Devuelve (analisis, modelo, uso).
+
+    imagenes: lista de {"etiqueta": str, "datos": bytes, "tipo": str}
+    """
     llave = leer_llave()
     if not llave:
         raise IAError("sin_llave")
@@ -258,13 +413,54 @@ def analizar(texto_proceso, lista_procesos, modelo=None):
         "\n\n=== LEVANTAMIENTO ===\n" + texto_proceso
     )
 
-    data = _pedir(llave, modelo, prompt)
+    contenido = [{"type": "text", "text": prompt}]
+    for i, img in enumerate(imagenes or []):
+        contenido.append({"type": "text",
+                          "text": f"\nFoto {i+1} — tomada en «{img['etiqueta']}»:"})
+        contenido.append({"type": "image", "source": {
+            "type": "base64", "media_type": img["tipo"],
+            "data": base64.b64encode(img["datos"]).decode("ascii")}})
+    if imagenes:
+        contenido.append({"type": "text", "text":
+            "\nLee las fotos: suelen traer el formato en papel, la pantalla del "
+            "sistema o el letrero pegado en la pared. Si ves algo que contradice o "
+            "completa lo que escribieron, dilo explícitamente en 'hallazgos_en_fotos'."})
+
+    data = _pedir(llave, modelo, contenido)
     texto = "".join(b.get("text", "") for b in data.get("content", [])
                     if b.get("type") == "text")
     uso = data.get("usage", {})
-    return _extraer_json(texto), data.get("model", modelo), {
-        "entrada": uso.get("input_tokens", 0),
-        "salida": uso.get("output_tokens", 0),
+    contexto = {
+        "stop_reason": data.get("stop_reason"),
+        "modelo": data.get("model", modelo),
+        "tokens_salida": uso.get("output_tokens", 0),
+        "tokens_entrada": uso.get("input_tokens", 0),
+        "caracteres": len(texto),
+    }
+
+    try:
+        analisis = _extraer_json(texto, contexto)
+    except IAError as e:
+        if e.codigo != "respuesta_ilegible":
+            raise
+        # Segunda oportunidad: se le devuelve lo que escribió y se le pide
+        # que lo entregue como JSON válido, sin nada más.
+        try:
+            reparado = _pedir(llave, modelo,
+                              "Esto debía ser un único objeto JSON válido pero no lo es. "
+                              "Devuélvelo corregido, completo y sin texto alrededor ni "
+                              "marcas de código:\n\n" + texto[:12000])
+            t2 = "".join(b.get("text", "") for b in reparado.get("content", [])
+                         if b.get("type") == "text")
+            analisis = _extraer_json(t2, contexto)
+            analisis["_reparado"] = True
+        except IAError:
+            raise e
+
+    return analisis, contexto["modelo"], {
+        "entrada": contexto["tokens_entrada"],
+        "salida": contexto["tokens_salida"],
+        "corte": contexto["stop_reason"],
     }
 
 

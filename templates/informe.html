@@ -283,6 +283,12 @@
       <ul class="txt">{% for x in a.automatizaciones %}<li><b>{{ x.propuesta }}</b><br>{{ x.que_haria_el_sistema }}
         {% if x.requisito %}<br><span class="tiny">Hace falta: {{ x.requisito }}</span>{% endif %}</li>{% endfor %}</ul></div>{% endif %}
 
+    {% if a.hallazgos_en_fotos %}<div class="cx"><h3>Lo que se vio en las fotos</h3>
+      <ul class="txt">{% for x in a.hallazgos_en_fotos %}<li><b>Foto {{ x.foto }}</b> — {{ x.observacion }}</li>{% endfor %}</ul></div>{% endif %}
+
+    {% if a.audios_por_escuchar %}<div class="cx"><h3>Audios pendientes de escuchar</h3>
+      <ul class="txt">{% for x in a.audios_por_escuchar %}<li><b>{{ x.donde }}</b> — {{ x.por_que }}</li>{% endfor %}</ul></div>{% endif %}
+
     {% if a.riesgos %}<div class="cx"><h3>Riesgos</h3>
       <ul class="txt">{% for x in a.riesgos %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
 
