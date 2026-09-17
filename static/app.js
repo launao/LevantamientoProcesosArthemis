@@ -317,8 +317,9 @@ function render() {
         <div><b>${esc(S.config.proyecto || 'Levantamiento')}</b><small>${esc(S.config.organizacion || 'Procesos')}</small></div></div>
       <nav class="nav">
         ${esClinica() ? `
+          ${nav('avance', '◱', 'Hoy y mañana', v)}
           ${nav('agenda', '◷', 'Agenda', v)}
-          ${nav('avance', '◱', 'Avance', v)}
+          ${nav('mapear', '✎', 'Por mapear', v)}
           ${nav('procesos', '▤', 'Procesos', v)}
           ${nav('mapa', '⤳', 'Mapa', v)}
         ` : `
@@ -355,10 +356,11 @@ function render() {
   const rutas = { tablero: vistaTablero, procesos: vistaProcesos, proceso: vistaProceso,
                   asignacion: vistaAsignacion, equipo: vistaEquipo, agenda: vistaAgenda,
                   mapa: vistaMapa, avance: vistaAvanceClinica, revision: vistaRevision,
+                  mapear: vistaPorMapear,
                   plantilla: vistaPlantilla,
                   ajustes: vistaAjustes, cuenta: vistaAjustes };
-  if (esClinica() && !['agenda', 'avance', 'procesos', 'proceso', 'mapa'].includes(v)) {
-    S.vista = 'agenda'; return render();
+  if (esClinica() && !['agenda', 'avance', 'mapear', 'procesos', 'proceso', 'mapa'].includes(v)) {
+    S.vista = 'avance'; return render();
   }
   // Las pantallas de configuración son solo del administrador. Se comprueba
   // aquí además de ocultar el menú, por si alguien llega por otra vía.
@@ -482,7 +484,7 @@ function tableroAdmin(m) {
   <div class="topbar"><h1>Tablero</h1><div class="sp"></div>
     <button class="btn p" id="nuevoTab">+ Nuevo proceso</button></div>
 
-  ${panelHoyVencidos(ps, { conDueno: true })}
+  ${panelClinica(ps)}
 
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos en total</div></div>
@@ -2502,27 +2504,19 @@ function fechaLarga(iso) {
    ═══════════════════════════════════════════════════════════════ */
 function vistaAgenda(m) {
   const ps = S.procesos.filter(p => p.estado !== 'aprobado');
-  const conFecha = ps.filter(p => p.fechaLimite);
-  const clasificar = p => {
-    const d = textoPlazo(p.fechaLimite).dias;
-    if (d === null) return 'sin';
-    if (d < 0) return 'vencidos';
-    if (d === 0) return 'hoy';
-    if (d <= 7) return 'semana';
-    return 'despues';
-  };
   const grupos = {
-    vencidos: { n: 'Pasados de fecha', ps: [] },
-    hoy: { n: 'Hoy', ps: [] },
-    semana: { n: 'Esta semana', ps: [] },
-    despues: { n: 'Más adelante', ps: [] },
-    sin: { n: 'Sin fecha todavía', ps: [] }
+    hoy:       { n: 'Hoy',              ps: [] },
+    manana:    { n: 'Mañana',           ps: [] },
+    semana:    { n: 'Resto de la semana', ps: [] },
+    siguiente: { n: 'Semana siguiente', ps: [] },
+    despues:   { n: 'Más adelante',     ps: [] },
+    vencidos:  { n: 'Quedaron atrás',   ps: [] },
+    sinfecha:  { n: 'Sin fecha todavía', ps: [] }
   };
-  ps.forEach(p => grupos[clasificar(p)].ps.push(p));
-  Object.values(grupos).forEach(g => g.ps.sort((a, b) =>
-    (a.fechaLimite || '9999').localeCompare(b.fechaLimite || '9999')));
+  ps.forEach(p => (grupos[cajonAgenda(p)] || grupos.sinfecha).ps.push(p));
 
-  const sinAtender = conFecha.filter(p => !p.atiende).length;
+  const sinAtender = ps.filter(p => p.fechaLimite && !p.atiende).length;
+  const orden = ['hoy', 'manana', 'semana', 'siguiente', 'despues', 'sinfecha', 'vencidos'];
 
   m.innerHTML = `
   <div class="topbar"><h1>Agenda de levantamiento</h1><div class="sp"></div>
@@ -2530,96 +2524,222 @@ function vistaAgenda(m) {
     <button class="btn p" id="proponerAg">+ Proponer un proceso</button></div>
 
   <div class="banner">
-    Aquí está lo que el equipo va a venir a preguntar. Para cada proceso, escriba
-    <b>quién de la clínica</b> los va a atender: es la persona que conoce ese trabajo
-    y que puede responder con detalle.
+    Esto es lo que el equipo va a venir a preguntar. Por cada proceso, diga
+    <b>quién de la clínica</b> los atiende y <b>a qué hora</b> puede.
     ${sinAtender ? `<br><b>Faltan ${sinAtender} por asignar de su lado.</b>` : ''}
   </div>
 
-  ${Object.entries(grupos).filter(([, g]) => g.ps.length).map(([k, g]) => `
-    <section class="grupo">
+  ${orden.map(k => {
+    const g = grupos[k];
+    if (!g.ps.length) return '';
+    return `<section class="grupo">
       <div class="grupo-cab">
-        <span class="pill ${k === 'vencidos' ? 'en_revision' : k === 'hoy' ? 'en_curso' : 'pendiente'}">${esc(g.n)}</span>
+        <span class="pill ${k === 'hoy' ? 'en_curso' : k === 'manana' ? 'en_revision' : k === 'vencidos' ? 'pendiente' : 'pendiente'}">
+          ${esc(g.n)}</span>
         <span class="tiny">${g.ps.length}</span>
+        <span class="tiny right">${g.ps.filter(p => p.atiende).length} con responsable asignado</span>
       </div>
-      <div class="grid g2">
-        ${g.ps.map(p => tarjetaAgenda(p)).join('')}
-      </div>
-    </section>`).join('') ||
-    '<div class="empty"><span class="e">◷</span>No hay procesos programados por ahora.</div>'}`;
+      ${porArea(g.ps).map(([area, lista]) => `
+        <div class="area-bloque">
+          <div class="area-titulo">${esc(area)} <span class="tiny">${lista.length}</span></div>
+          <div class="grid g3">${lista.map(p => tarjetaAgenda(p)).join('')}</div>
+        </div>`).join('')}
+    </section>`;
+  }).join('') || '<div class="empty"><span class="e">◷</span>No hay procesos programados por ahora.</div>'}`;
 
   const bp = document.getElementById('proponerAg');
   if (bp) bp.onclick = modalProponer;
-
-  m.querySelectorAll('[data-nota]').forEach(inp => {
-    let t = null;
-    inp.oninput = () => {
-      clearTimeout(t);
-      t = setTimeout(async () => {
-        try {
-          await api('/procesos/' + inp.dataset.nota + '/nota-clinica',
-                    { method: 'PUT', body: { notasClinica: inp.value } });
-          const p = S.procesos.find(x => x.id === inp.dataset.nota);
-          if (p) p.notasClinica = inp.value;
-          const eco = m.querySelector(`[data-econota="${inp.dataset.nota}"]`);
-          if (eco) { eco.textContent = 'Guardado'; setTimeout(() => { eco.textContent = ''; }, 2000); }
-        } catch (_) { toast('No se pudo guardar'); }
-      }, 700);
-    };
-  });
-
-  m.querySelectorAll('[data-atiende]').forEach(inp => {
-    let t = null;
-    inp.oninput = () => {
-      clearTimeout(t);
-      t = setTimeout(async () => {
-        try {
-          await api('/procesos/' + inp.dataset.atiende + '/atiende',
-                    { method: 'PUT', body: { atiende: inp.value } });
-          const p = S.procesos.find(x => x.id === inp.dataset.atiende);
-          if (p) p.atiende = inp.value;
-          const eco = m.querySelector(`[data-eco="${inp.dataset.atiende}"]`);
-          if (eco) eco.textContent = inp.value ? 'Guardado' : '';
-        } catch (_) { toast('No se pudo guardar'); }
-      }, 600);
-    };
-  });
+  conectarAgenda(m);
 }
 
+/** Igual que el resto de la app, pero con "mañana" aparte: a la clínica le
+    importa lo de hoy y lo que viene, no lo que ya se les pasó. */
+function cajonAgenda(p) {
+  const f = (p.fechaLimite || '').slice(0, 10);
+  if (!f) return 'sinfecha';
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const iso = d => d.toISOString().slice(0, 10);
+  const manana = new Date(hoy); manana.setDate(hoy.getDate() + 1);
+  const finSemana = new Date(hoy); finSemana.setDate(hoy.getDate() + (7 - ((hoy.getDay() + 6) % 7)) - 1);
+  const finSig = new Date(finSemana); finSig.setDate(finSemana.getDate() + 7);
+
+  if (f < iso(hoy)) return 'vencidos';
+  if (f === iso(hoy)) return 'hoy';
+  if (f === iso(manana)) return 'manana';
+  if (f <= iso(finSemana)) return 'semana';
+  if (f <= iso(finSig)) return 'siguiente';
+  return 'despues';
+}
+
+/** Agrupadas por área: quien atiende suele ser la misma persona para
+    varios procesos de la misma área. */
+function porArea(lista) {
+  const mapa = {};
+  lista.forEach(p => { (mapa[p.area || 'Sin área'] = mapa[p.area || 'Sin área'] || []).push(p); });
+  return Object.entries(mapa).sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([a, l]) => [a, l.sort((x, y) => (x.hora || '99').localeCompare(y.hora || '99'))]);
+}
+
+const HORAS = (() => {
+  const h = [];
+  for (let i = 6; i <= 19; i++) {
+    h.push(`${String(i).padStart(2, '0')}:00`);
+    h.push(`${String(i).padStart(2, '0')}:30`);
+  }
+  return h;
+})();
+
 function tarjetaAgenda(p) {
-  const plazo = textoPlazo(p.fechaLimite);
-  const listo = p.estado === 'en_revision';
-  return `<div class="card agenda-card">
-    <div class="flex" style="align-items:flex-start;margin-bottom:8px">
-      <div style="flex:1">
+  const listo = !!p.atiende;
+  const conNota = !!(p.notasClinica || '').trim();
+  const enviado = p.estado === 'en_revision';
+
+  return `<div class="card agenda-card ${listo ? 'listo' : 'pendiente-asig'}">
+    <div class="flex" style="align-items:flex-start;gap:8px;margin-bottom:10px">
+      <div style="flex:1;min-width:0">
         <b>${esc(p.nombre)}</b>
-        <div class="tiny">${esc(p.codigo || '')} · ${esc(p.area || 'Sin área')}</div>
+        <div class="tiny">${esc(p.codigo || '')} · lo levanta ${esc(nombrePersona(p.responsable))}</div>
       </div>
-      ${plazo.html}
+      ${listo ? '<span class="ok-marca" title="Ya tiene responsable">✓</span>' : ''}
     </div>
 
-    <div class="tiny" style="margin-bottom:10px">
-      Lo levanta: <b>${esc(nombrePersona(p.responsable))}</b>
-      ${p.contacto ? `<br>Referencia dada: ${esc(p.contacto)}` : ''}
+    <div class="agenda-campos">
+      <label>
+        <span class="lbl">Hora</span>
+        <select data-hora="${p.id}">
+          <option value="">— Sin hora —</option>
+          ${HORAS.map(h => `<option value="${h}" ${p.hora === h ? 'selected' : ''}>${h}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        <span class="lbl">¿Quién atiende?</span>
+        <input type="text" data-atiende="${p.id}" value="${esc(p.atiende || '')}"
+          placeholder="Nombre y cargo" list="sug-atiende">
+      </label>
     </div>
+    ${p.contacto ? `<div class="tiny" style="margin-top:6px">Referencia dada: ${esc(p.contacto)}</div>` : ''}
 
-    <label class="f" style="margin:0 0 10px">
-      <span class="lbl">¿Quién atiende de la clínica?</span>
-      <input type="text" data-atiende="${p.id}" value="${esc(p.atiende || '')}"
-        placeholder="Nombre y cargo de quien va a responder">
+    <details class="nota-plegable" ${conNota ? 'open' : ''}>
+      <summary>${conNota ? '⚑ Tener en cuenta' : '+ Agregar nota para quien entrevista'}</summary>
+      <textarea data-nota="${p.id}" placeholder="Ej: solo está los martes; el proceso cambió en junio">${esc(p.notasClinica || '')}</textarea>
+    </details>
+
+    <div class="flex" style="margin-top:8px;gap:8px">
       <span class="tiny" data-eco="${p.id}"></span>
-    </label>
-
-    <label class="f" style="margin:0">
-      <span class="lbl">Tener en cuenta</span>
-      <span class="hint">Lo que quien entrevista debería saber antes de llegar.</span>
-      <textarea data-nota="${p.id}" style="min-height:60px;font-size:13px"
-        placeholder="Ej: solo está los martes; el proceso cambió en junio">${esc(p.notasClinica || '')}</textarea>
-      <span class="tiny" data-econota="${p.id}"></span>
-    </label>
-
-    ${listo ? `<div style="margin-top:10px"><a class="btn sm" href="#/proceso/${p.id}">Ver lo levantado</a></div>` : ''}
+      ${enviado ? `<a class="btn sm right" href="#/proceso/${p.id}">Ver lo levantado</a>` : ''}
+    </div>
   </div>`;
+}
+
+function conectarAgenda(m) {
+  // Los nombres ya usados se ofrecen como sugerencia: casi siempre atiende
+  // la misma persona varios procesos de su área.
+  const usados = [...new Set(S.procesos.map(p => p.atiende).filter(Boolean))];
+  if (!document.getElementById('sug-atiende')) {
+    const dl = document.createElement('datalist');
+    dl.id = 'sug-atiende';
+    dl.innerHTML = usados.map(x => `<option value="${esc(x)}"></option>`).join('');
+    m.appendChild(dl);
+  }
+
+  const guardar = (pid, cuerpo, campo) => {
+    const eco = m.querySelector(`[data-eco="${pid}"]`);
+    if (eco) eco.textContent = 'Guardando…';
+    api('/procesos/' + pid + '/atiende', { method: 'PUT', body: cuerpo })
+      .then(() => {
+        const p = S.procesos.find(x => x.id === pid);
+        if (p) Object.assign(p, campo);
+        if (eco) { eco.textContent = 'Guardado ✓'; setTimeout(() => { eco.textContent = ''; }, 1800); }
+      })
+      .catch(() => { if (eco) eco.textContent = 'No se pudo guardar'; });
+  };
+
+  m.querySelectorAll('[data-hora]').forEach(sel => sel.onchange = () =>
+    guardar(sel.dataset.hora, { hora: sel.value }, { hora: sel.value }));
+
+  const conRetraso = (el, fn) => {
+    let t = null;
+    el.oninput = () => { clearTimeout(t); t = setTimeout(fn, 700); };
+  };
+
+  m.querySelectorAll('[data-atiende]').forEach(inp => conRetraso(inp, () => {
+    guardar(inp.dataset.atiende, { atiende: inp.value }, { atiende: inp.value });
+    const tarjeta = inp.closest('.agenda-card');
+    if (tarjeta) tarjeta.classList.toggle('listo', !!inp.value.trim());
+  }));
+
+  m.querySelectorAll('[data-nota]').forEach(inp => conRetraso(inp, () => {
+    const pid = inp.dataset.nota;
+    const eco = m.querySelector(`[data-eco="${pid}"]`);
+    api('/procesos/' + pid + '/nota-clinica', { method: 'PUT', body: { notasClinica: inp.value } })
+      .then(() => {
+        const p = S.procesos.find(x => x.id === pid);
+        if (p) p.notasClinica = inp.value;
+        if (eco) { eco.textContent = 'Nota guardada ✓'; setTimeout(() => { eco.textContent = ''; }, 1800); }
+      })
+      .catch(() => { if (eco) eco.textContent = 'No se pudo guardar la nota'; });
+  }));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Por mapear — lo que la clínica quiere que se levante
+
+   Los procesos que ellos proponen, con el estado en que van. Es su
+   forma de decir "esto también hay que mirarlo" sin tener que
+   pedírselo a nadie.
+   ═══════════════════════════════════════════════════════════════ */
+function vistaPorMapear(m) {
+  const propuestos = S.procesos.filter(p => p.propuestoPor);
+  const sinAsignar = propuestos.filter(p => !p.responsable);
+  const enCurso = propuestos.filter(p => p.responsable && p.estado !== 'aprobado');
+  const listos = propuestos.filter(p => p.estado === 'aprobado');
+
+  const tabla = lista => `<div class="tw"><table class="t"><tbody>${lista.map(p => `<tr>
+    <td><b>${esc(p.nombre)}</b>
+      <div class="tiny">${esc(p.area || 'Sin área')}${p.contacto ? ' · ' + esc(p.contacto) : ''}</div>
+      ${p.notasClinica ? `<div class="tiny nota-mini">⚑ ${esc(recortar(aTextoPlano(p.notasClinica), 110))}</div>` : ''}</td>
+    <td style="width:170px" class="mut">${p.responsable ? esc(nombrePersona(p.responsable)) : '<i>Sin asignar aún</i>'}</td>
+    <td style="width:130px">${textoPlazo(p.fechaLimite).html}</td>
+    <td style="width:110px"><span class="pill ${p.estado}">${esc(etiquetaEstado(p.estado))}</span></td>
+    <td style="width:120px">${p.informeUrl
+      ? `<a class="btn sm" href="${esc(p.informeUrl)}" target="_blank" rel="noopener">Leer</a>` : ''}</td>
+  </tr>`).join('')}</tbody></table></div>`;
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Procesos por mapear</h1><div class="sp"></div>
+    <button class="btn p" id="proponerPM">+ Proponer un proceso</button></div>
+
+  <div class="banner">
+    Aquí queda lo que ustedes proponen levantar. Apunte cualquier cosa que aparezca
+    en el camino: un trámite que nadie tiene documentado, algo que genera reclamos,
+    un paso que se hace distinto en cada turno. La coordinación decide quién lo toma
+    y cuándo.
+  </div>
+
+  ${propuestos.length ? `
+    ${sinAsignar.length ? `<section class="grupo">
+      <div class="grupo-cab"><span class="pill pendiente">Esperando asignación</span>
+        <span class="tiny">${sinAsignar.length}</span></div>
+      <div class="card" style="padding:0">${tabla(sinAsignar)}</div>
+    </section>` : ''}
+
+    ${enCurso.length ? `<section class="grupo">
+      <div class="grupo-cab"><span class="pill en_curso">Ya programados</span>
+        <span class="tiny">${enCurso.length}</span></div>
+      <div class="card" style="padding:0">${tabla(enCurso)}</div>
+    </section>` : ''}
+
+    ${listos.length ? `<section class="grupo">
+      <div class="grupo-cab"><span class="pill aprobado">Terminados</span>
+        <span class="tiny">${listos.length}</span></div>
+      <div class="card" style="padding:0">${tabla(listos)}</div>
+    </section>` : ''}
+  ` : `<div class="empty"><span class="e">✎</span>
+      Todavía no han propuesto ninguno.<br>
+      <span class="tiny">Use el botón de arriba cuando aparezca algo que valga la pena levantar.</span>
+    </div>`}`;
+
+  document.getElementById('proponerPM').onclick = modalProponer;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3024,6 +3144,39 @@ function conectarCuadroClinica(p) {
    No le interesa quién va atrasado sino cuánto falta para terminar y
    qué ya puede leer.
    ═══════════════════════════════════════════════════════════════ */
+/** Para la clínica, lo urgente es prepararse: hoy y mañana arriba, lo que
+    quedó atrás al final y sin alarma, porque no es su tarea resolverlo. */
+function panelClinica(ps) {
+  const activos = ps.filter(p => p.estado !== 'aprobado');
+  const caja = (k, titulo, vacio, clase) => {
+    const lista = activos.filter(p => cajonAgenda(p) === k)
+      .sort((a, b) => (a.hora || '99').localeCompare(b.hora || '99'));
+    return `<div class="card panel-urg ${lista.length ? clase : ''}">
+      <h3>${titulo} <span class="cuenta-urg">${lista.length}</span></h3>
+      ${lista.length ? `<div class="urg-lista">${lista.map(p => `
+        <a class="urg-item" href="#/proceso/${p.id}">
+          <span class="urg-nom">${p.hora ? `<b class="hora">${esc(p.hora)}</b> ` : ''}${esc(p.nombre)}</span>
+          <span class="urg-meta">${esc(p.area || 'Sin área')} · lo levanta ${esc(nombrePersona(p.responsable))}</span>
+          <span class="urg-der">${p.atiende
+            ? `<span class="tiny">atiende ${esc(p.atiende)}</span>`
+            : '<span class="falta-asig">falta asignar</span>'}</span>
+        </a>`).join('')}</div>` : `<div class="mut">${vacio}</div>`}
+    </div>`;
+  };
+
+  const atrasados = activos.filter(p => cajonAgenda(p) === 'vencidos');
+
+  return `<div class="grid g2" style="margin-bottom:18px">
+    ${caja('hoy', 'Hoy vienen a levantar', 'Hoy no hay ninguno programado.', 'activo')}
+    ${caja('manana', 'Mañana', 'Mañana no hay nada agendado todavía.', 'manana')}
+  </div>
+  ${atrasados.length ? `<div class="tiny" style="margin-bottom:18px;padding:10px 14px;
+    background:var(--surface-2);border-radius:10px">
+    ${atrasados.length} proceso(s) quedaron pasados de fecha y el equipo los reprogramará:
+    ${atrasados.slice(0, 5).map(p => esc(p.nombre)).join(' · ')}
+  </div>` : ''}`;
+}
+
 function vistaAvanceClinica(m) {
   const ps = S.procesos;
   const enviados = ps.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado');
@@ -3032,9 +3185,10 @@ function vistaAvanceClinica(m) {
   const sinAtender = ps.filter(p => !p.atiende && p.estado !== 'aprobado');
 
   m.innerHTML = `
-  <div class="topbar"><h1>Avance del levantamiento</h1><div class="sp"></div>
+  <div class="topbar"><h1>Hoy y mañana</h1><div class="sp"></div>
     <button class="btn p" id="proponer">+ Proponer un proceso</button></div>
 
+  <h3 style="margin:26px 0 12px;font-size:17px">Cómo va todo</h3>
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos identificados</div></div>
     <div class="kpi"><div class="n">${av}%</div><div class="t">Avance general</div>
@@ -3047,7 +3201,7 @@ function vistaAvanceClinica(m) {
     Hay ${sinAtender.length} proceso(s) donde todavía no han dicho quién de la clínica responde.
     Se asignan desde <b>Agenda</b>.</div>` : ''}
 
-  ${panelHoyVencidos(ps, { conDueno: true })}
+  ${panelClinica(ps)}
 
   <div class="grid g2" style="margin-bottom:16px">
     <div class="card"><h3>Cómo va cada área</h3>

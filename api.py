@@ -5,6 +5,7 @@ Todas las rutas cuelgan de /api salvo /media/<id>, que sirve fotos y audios.
 """
 import csv
 import hashlib
+import re
 import io
 import os
 import secrets
@@ -183,6 +184,7 @@ def _procesos(solo_de=None):
             "fechaLimite": str(p.get("fecha_limite") or ""),
             "contacto": p.get("contacto") or "",
             "atiende": p.get("atiende") or "",
+            "hora": p.get("hora") or "",
             "notasClinica": p.get("notas_clinica") or "",
             "notaRevision": p.get("nota_revision") or "",
             "revisadoEn": str(p.get("revisado_en") or ""),
@@ -411,9 +413,22 @@ def designar_atiende(pid):
         return jsonify({"error": "no_existe"}), 404
 
     d = request.get_json(silent=True) or {}
-    D.execute("UPDATE procesos SET atiende=? WHERE id=?",
-              ((d.get("atiende") or "").strip()[:200], pid))
-    auditar("atiende_designado", "proceso", pid, d.get("atiende"))
+    campos, params = [], []
+    if "atiende" in d:
+        campos.append("atiende=?")
+        params.append((d.get("atiende") or "").strip()[:200])
+    # La hora la pone la clínica: es la única parte de la programación que
+    # depende de ellos, porque saben a qué hora puede atender cada persona.
+    if "hora" in d:
+        hora = (d.get("hora") or "").strip()[:5]
+        campos.append("hora=?")
+        params.append(hora if re.match(r"^\d{2}:\d{2}$", hora) else None)
+    if not campos:
+        return jsonify({"ok": True})
+
+    params.append(pid)
+    D.execute(f"UPDATE procesos SET {', '.join(campos)} WHERE id=?", tuple(params))
+    auditar("agenda_actualizada", "proceso", pid, f"{d.get('atiende','')} {d.get('hora','')}")
     return jsonify({"ok": True})
 
 

@@ -185,6 +185,7 @@ COLUMNAS_NUEVAS = [
     ("usuarios", "ultimo_visto", "TEXT"),
     ("procesos", "nota_revision", "TEXT"),
     ("procesos", "revisado_en", "TEXT"),
+    ("procesos", "hora", "TEXT"),
 ]
 
 
