@@ -4213,8 +4213,8 @@ function vistaRevision(m) {
 
   <div class="card barra-lote">
     <label class="flex" style="gap:10px;cursor:pointer">
-      <input type="checkbox" id="selTodos" style="width:22px;height:22px">
-      <b>Seleccionar para analizar en conjunto</b>
+      <input type="checkbox" id="selTodos" style="width:24px;height:24px">
+      <b>Marcar todos</b>
     </label>
     <span class="tiny" id="cuentaSel">ninguno seleccionado</span>
     <button class="btn p" id="analizarLote" disabled>✨ Analizar los seleccionados</button>
@@ -4239,24 +4239,35 @@ function vistaRevision(m) {
     const n = S.selLote.length;
     const eco = document.getElementById('cuentaSel');
     const btn = document.getElementById('analizarLote');
-    if (eco) eco.textContent = n === 0 ? 'ninguno seleccionado'
-      : n === 1 ? '1 seleccionado — elige al menos 2' : `${n} seleccionados`;
+    if (eco) eco.textContent = n === 0
+      ? 'Marca la casilla de los procesos que quieras analizar juntos'
+      : n === 1 ? '1 seleccionado — hacen falta al menos 2'
+      : `${n} seleccionados`;
     if (btn) btn.disabled = n < 2;
   };
 
   m.querySelectorAll('[data-sel]').forEach(cb => cb.onchange = () => {
     const id = cb.dataset.sel;
     S.selLote = cb.checked ? S.selLote.concat([id]) : S.selLote.filter(x => x !== id);
+    const tarjeta = cb.closest('.rev-card');
+    if (tarjeta) tarjeta.classList.toggle('elegida', cb.checked);
     refrescarSel();
   });
 
   const st = document.getElementById('selTodos');
-  if (st) st.onchange = () => {
+  if (st) {
     const visibles = [...m.querySelectorAll('[data-sel]')];
-    S.selLote = st.checked ? visibles.map(cb => cb.dataset.sel) : [];
-    visibles.forEach(cb => { cb.checked = st.checked; });
-    refrescarSel();
-  };
+    st.checked = visibles.length > 0 && visibles.every(cb => cb.checked);
+    st.onchange = () => {
+      S.selLote = st.checked ? visibles.map(cb => cb.dataset.sel) : [];
+      visibles.forEach(cb => {
+        cb.checked = st.checked;
+        const t = cb.closest('.rev-card');
+        if (t) t.classList.toggle('elegida', st.checked);
+      });
+      refrescarSel();
+    };
+  }
 
   document.getElementById('analizarLote').onclick = () => modalLote(S.selLote);
   document.getElementById('verLotes').onclick = () => modalLote(null);
@@ -4275,9 +4286,13 @@ function tarjetaRevision(p) {
   const ev = p.evidencias || [];
   const av = avance(p);
   const esperando = p.estado === 'en_revision';
+  const seleccionado = (S.selLote || []).includes(p.id);
 
-  return `<div class="rev-card ${esperando ? 'esperando' : ''}">
+  return `<div class="rev-card ${esperando ? 'esperando' : ''} ${seleccionado ? 'elegida' : ''}">
     <div class="rev-cab">
+      <label class="sel-lote" title="Incluir en el análisis conjunto">
+        <input type="checkbox" data-sel="${p.id}" ${seleccionado ? 'checked' : ''}>
+      </label>
       <div style="flex:1;min-width:0">
         <b class="rev-nom">${esc(p.nombre)}</b>
         <div class="tiny">${esc(p.codigo || '')} · ${esc(p.area || 'Sin área')} ·

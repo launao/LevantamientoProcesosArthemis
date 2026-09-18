@@ -739,7 +739,12 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
 /* ── Análisis en conjunto ─────────────────────── */
 .barra-lote{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px;padding:14px 18px}
 .barra-lote .tiny{flex:1}
-.sel-lote input{width:24px;height:24px;margin:4px 0 0}
+.sel-lote{display:flex;align-items:center;justify-content:center;width:44px;height:44px;
+  border:1.5px solid var(--line-2);border-radius:9px;cursor:pointer;flex:none;background:var(--surface)}
+.sel-lote:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.sel-lote input{width:22px;height:22px;margin:0;cursor:pointer}
+.rev-card.elegida{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 5%,transparent)}
+.rev-card.elegida .sel-lote{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
 .chips-lote{display:flex;flex-wrap:wrap;gap:7px}
 .chips-lote .chip{padding:7px 13px;font-size:14px;min-height:0}
 .chips-lote .chip.dato{background:color-mix(in srgb,var(--accent) 13%,transparent);
