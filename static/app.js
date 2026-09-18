@@ -511,6 +511,7 @@ const WIDGETS = [
   { k: 'progreso', n: 'Progreso del día' },
   { k: 'hoy',      n: 'Lo de hoy' },
   { k: 'manana',   n: 'Lo de mañana' },
+  { k: 'choques',  n: 'Choques de agenda' },
   { k: 'avisos',   n: 'Avisos de la clínica' },
   { k: 'vencidos', n: 'Pasados de fecha' },
   { k: 'totales',  n: 'Totales del proyecto' },
@@ -542,6 +543,7 @@ function tableroAdmin(m) {
     progreso: () => wProgresoDia(filtrados),
     hoy:      () => wDia(filtrados, 'hoy', 'Hoy vienen a levantar', 'Hoy no hay ninguno programado.'),
     manana:   () => wDia(filtrados, 'manana', 'Mañana', 'Mañana todavía no hay nada.'),
+    choques:  () => wChoques(),
     avisos:   () => wAvisos(ps),
     vencidos: () => wVencidos(filtrados),
     totales:  () => wTotales(ps, filtrados),
@@ -648,6 +650,33 @@ function wDia(ps, cajon, titulo, vacio) {
         </span>
         <span class="urg-der"><span class="tiny">${avance(p)}%</span></span>
       </a>`).join('')}</div>` : `<div class="mut">${vacio}</div>`}
+  </div>`;
+}
+
+/** Dos entrevistas encimadas para la misma persona. */
+function wChoques() {
+  const lista = choquesAgenda();
+  if (!lista.length) return '';
+
+  return `<div class="card widget choques-w">
+    <h3>Choques de agenda <span class="cuenta-urg">${lista.length}</span></h3>
+    <p class="tiny">La misma persona tiene dos entrevistas encimadas. Ábrelas para
+      moverlas de hora o pasarlas a alguien libre.</p>
+    <div class="choques-lista">${lista.map(({ a, b }) => `
+      <div class="choque-par">
+        <div class="cp-cuando">
+          <b>${esc(a.hora || '')}</b>
+          <span class="tiny">${esc(fechaDia(a.fechaCita))}</span>
+        </div>
+        <div class="cp-quien">
+          <span class="tag-persona" style="--tp:${colorPersona(a.responsable)}">${esc(nombrePersona(a.responsable))}</span>
+        </div>
+        <div class="cp-procesos">
+          <a href="#/proceso/${a.id}">${esc(a.nombre)}</a>
+          <span class="cp-vs">y</span>
+          <a href="#/proceso/${b.id}">${esc(b.nombre)}${b.hora !== a.hora ? ` <span class="tiny">(${esc(b.hora)})</span>` : ''}</a>
+        </div>
+      </div>`).join('')}</div>
   </div>`;
 }
 
@@ -2725,7 +2754,9 @@ function porCercania(a, b) {
 }
 
 function tarjetaTablero(p) {
-  return `<div class="tarjeta" data-id="${p.id}">
+  const choques = chocaCon(p);
+  return `<div class="tarjeta ${choques.length ? 'con-choque' : ''}" data-id="${p.id}">
+    ${choques.length ? `<div class="marca-choque" title="Choca con ${esc(choques[0].nombre)}">⚠ choca a las ${esc(p.hora)}</div>` : ''}
     <a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
     <div class="tiny">${esc(p.area || 'Sin área')}</div>
     <div class="flex wrap" style="margin-top:8px;gap:8px">
@@ -4602,6 +4633,7 @@ function bloqueCita(p) {
         <input type="text" id="cAtiende" value="${esc(p.atiende || '')}"
           placeholder="Nombre y cargo de quien responde"></label>
     </div>
+    <div id="avisoChoque">${avisoChoque(p)}</div>
     <div class="tiny" style="margin-top:7px">
       Esto es lo que sale en el tablero del día. La <b>fecha de entrega</b> de arriba es
       otra cosa: es cuándo se necesita el proceso terminado.
@@ -4628,8 +4660,30 @@ function conectarCita(p) {
       .catch(() => { if (eco) eco.textContent = 'No se pudo guardar'; });
   };
 
-  fecha.onchange = () => guardar({ fechaCita: fecha.value });
-  hora.onchange = () => guardar({ hora: hora.value });
+  const repintarChoque = () => {
+    const caja = document.getElementById('avisoChoque');
+    if (!caja) return;
+    caja.innerHTML = avisoChoque(p);
+
+    caja.querySelectorAll('[data-pasar]').forEach(b => b.onclick = async () => {
+      if (!esAdmin()) { toast('Solo la coordinación reasigna'); return; }
+      await asignar(p.id, b.dataset.pasar);
+      p.responsable = b.dataset.pasar;
+      const sel = document.getElementById('pResp');
+      if (sel) sel.value = b.dataset.pasar;
+      repintarChoque();
+    });
+
+    caja.querySelectorAll('[data-mover]').forEach(b => b.onclick = () => {
+      hora.value = b.dataset.mover;
+      guardar({ hora: b.dataset.mover });
+      repintarChoque();
+      toast('Movido a las ' + b.dataset.mover);
+    });
+  };
+
+  fecha.onchange = () => { guardar({ fechaCita: fecha.value }); setTimeout(repintarChoque, 50); };
+  hora.onchange = () => { guardar({ hora: hora.value }); setTimeout(repintarChoque, 50); };
 
   let t = null;
   atiende.oninput = () => {
@@ -4639,10 +4693,122 @@ function conectarCita(p) {
 
   // Atajo: casi siempre quien atiende es la persona que ya se anotó como
   // referencia. Se ofrece en un clic en vez de hacer que la reescriban.
+  repintarChoque();
+
   const usar = document.getElementById('usarContacto');
   if (usar) usar.onclick = () => {
     atiende.value = p.contacto;
     guardar({ atiende: p.contacto });
     usar.remove();
   };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Choques de agenda
+
+   Una entrevista de levantamiento dura entre 45 y 90 minutos. Dos citas
+   pegadas para la misma persona no es una incomodidad: es una que se
+   hace mal o no se hace. Conviene verlo antes, no el día de.
+   ═══════════════════════════════════════════════════════════════ */
+const DURACION_MIN = 60;
+
+function enMinutos(hora) {
+  if (!/^\d{2}:\d{2}$/.test(hora || '')) return null;
+  const [h, m] = hora.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function seCruzan(a, b) {
+  const ma = enMinutos(a), mb = enMinutos(b);
+  if (ma === null || mb === null) return false;
+  return Math.abs(ma - mb) < DURACION_MIN;
+}
+
+/** Los procesos con los que choca este, del mismo levantador. */
+function chocaCon(p, lista) {
+  const dia = (p.fechaCita || '').slice(0, 10);
+  if (!dia || !p.hora || !p.responsable || p.estado === 'aprobado') return [];
+  return (lista || S.procesos).filter(x =>
+    x.id !== p.id &&
+    x.responsable === p.responsable &&
+    x.estado !== 'aprobado' &&
+    (x.fechaCita || '').slice(0, 10) === dia &&
+    seCruzan(x.hora, p.hora));
+}
+
+/** Todos los choques del proyecto, agrupados para no repetir la pareja. */
+function choquesAgenda() {
+  const vistos = new Set();
+  const salida = [];
+  S.procesos.forEach(p => {
+    chocaCon(p).forEach(otro => {
+      const clave = [p.id, otro.id].sort().join('|');
+      if (vistos.has(clave)) return;
+      vistos.add(clave);
+      salida.push({ a: p, b: otro });
+    });
+  });
+  return salida.sort((x, y) =>
+    ((x.a.fechaCita || '') + (x.a.hora || '')).localeCompare((y.a.fechaCita || '') + (y.a.hora || '')));
+}
+
+/** Quién más podría tomar esta entrevista a esa hora. */
+function levantadoresLibres(p) {
+  const dia = (p.fechaCita || '').slice(0, 10);
+  if (!dia || !p.hora) return [];
+  return S.equipo
+    .filter(u => (u.rol === 'analista' || u.rol === 'admin') && u.id !== p.responsable)
+    .map(u => {
+      const ocupado = S.procesos.some(x =>
+        x.responsable === u.id && x.estado !== 'aprobado' &&
+        (x.fechaCita || '').slice(0, 10) === dia && seCruzan(x.hora, p.hora));
+      const carga = S.procesos.filter(x =>
+        x.responsable === u.id && (x.fechaCita || '').slice(0, 10) === dia).length;
+      return { u, ocupado, carga };
+    })
+    .filter(x => !x.ocupado)
+    .sort((a, b) => a.carga - b.carga);
+}
+
+/** Qué horas de ese mismo día le quedan libres a quien lo tiene. */
+function horasLibres(p) {
+  const dia = (p.fechaCita || '').slice(0, 10);
+  if (!dia || !p.responsable) return [];
+  const ocupadas = S.procesos
+    .filter(x => x.id !== p.id && x.responsable === p.responsable &&
+      x.estado !== 'aprobado' && (x.fechaCita || '').slice(0, 10) === dia)
+    .map(x => x.hora).filter(Boolean);
+  return HORAS.filter(h => h.endsWith(':00') && !ocupadas.some(o => seCruzan(o, h)));
+}
+
+/** El aviso con las salidas concretas, no solo el problema. */
+function avisoChoque(p) {
+  const choques = chocaCon(p);
+  if (!choques.length) return '';
+
+  const quien = nombrePersona(p.responsable);
+  const libres = levantadoresLibres(p).slice(0, 3);
+  const horas = horasLibres(p).slice(0, 4);
+
+  return `<div class="choque">
+    <div class="ch-cab">⚠ ${esc(quien)} ya tiene otra entrevista a esa hora</div>
+    <div class="ch-lista">${choques.map(x => `
+      <div class="ch-item"><b>${esc(x.hora || '')}</b> ${esc(x.nombre)}
+        <span class="tiny">${esc(x.area || '')}</span></div>`).join('')}</div>
+
+    <div class="ch-salidas">
+      ${libres.length ? `<div class="ch-grupo">
+        <span class="lbl">Pasarlo a alguien libre</span>
+        <div class="flex wrap" style="gap:7px">${libres.map(x =>
+          `<button class="btn sm" data-pasar="${x.u.id}">${esc(x.u.nombre)}
+            <span class="tiny">${x.carga ? x.carga + ' ese día' : 'libre'}</span></button>`).join('')}</div>
+      </div>` : '<div class="tiny">Ese día y a esa hora no hay nadie más libre.</div>'}
+
+      ${horas.length ? `<div class="ch-grupo">
+        <span class="lbl">O moverlo de hora</span>
+        <div class="flex wrap" style="gap:7px">${horas.map(h =>
+          `<button class="btn sm" data-mover="${h}">${h}</button>`).join('')}</div>
+      </div>` : ''}
+    </div>
+  </div>`;
 }
