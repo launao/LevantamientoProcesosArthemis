@@ -2165,7 +2165,12 @@ const GRUPOS_ESTADO = [
 function vistaAsignacion(m) {
   S.agrupar = S.agrupar || 'fecha';
   S.cerradosAsig = S.cerradosAsig || new Set();
+  S.filtroPersona = S.filtroPersona || '';
+  S.filtroCuando = S.filtroCuando || '';
+  S.buscaAsig = S.buscaAsig || '';
   const grupos = S.agrupar === 'fecha' ? GRUPOS_FECHA : GRUPOS_ESTADO;
+  const columnas = columnasPersonas()
+    .filter(c => !S.filtroPersona || c.id === S.filtroPersona);
 
   m.innerHTML = `
   <div class="topbar"><h1>Asignación</h1><div class="sp"></div>
@@ -2176,13 +2181,42 @@ function vistaAsignacion(m) {
     <button class="btn sm" id="plegarTodo">${S.cerradosAsig.size ? 'Abrir todo' : 'Cerrar todo'}</button>
   </div>
 
+  <div class="card filtros-asig">
+    <input type="text" id="fBusca" placeholder="Buscar un proceso…" value="${esc(S.buscaAsig)}">
+    <select id="fPersona">
+      <option value="">Todas las personas</option>
+      <option value="__sin__" ${S.filtroPersona === '__sin__' ? 'selected' : ''}>Sin asignar</option>
+      ${S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista').map(u =>
+        `<option value="${u.id}" ${S.filtroPersona === u.id ? 'selected' : ''}>${esc(u.nombre)}</option>`).join('')}
+    </select>
+    <select id="fCuando">
+      <option value="">Cualquier fecha de entrega</option>
+      ${[['vencidos', 'Vencidos'], ['hoy', 'Hoy'], ['semana', 'Esta semana'],
+         ['siguiente', 'Semana siguiente'], ['sinfecha', 'Sin fecha']].map(([k, n]) =>
+        `<option value="${k}" ${S.filtroCuando === k ? 'selected' : ''}>${n}</option>`).join('')}
+    </select>
+    ${(S.buscaAsig || S.filtroPersona || S.filtroCuando)
+      ? '<button class="btn sm" id="limpiarF">Quitar filtros</button>' : ''}
+  </div>
+
   ${esAdmin()
-    ? '<div class="tiny" style="margin-bottom:12px">Arrastra una tarjeta a la columna de otra persona para reasignarla.</div>'
+    ? '<div class="tiny" style="margin-bottom:12px">Arrastra una tarjeta a la columna de otra persona para reasignarla. Dentro de cada cajón van de la fecha más cercana a la más lejana.</div>'
     : '<div class="banner">Solo el administrador reparte los procesos.</div>'}
 
   <div class="tablero">
-    ${columnasPersonas().map(col => columnaPersona(col, grupos)).join('')}
+    ${columnas.map((col, i) => columnaPersona(col, grupos, i)).join('')}
   </div>`;
+
+  const bind = (id, clave) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.oninput = el.onchange = () => { S[clave] = el.value; vistaAsignacion(m); };
+  };
+  bind('fBusca', 'buscaAsig'); bind('fPersona', 'filtroPersona'); bind('fCuando', 'filtroCuando');
+  const lf = document.getElementById('limpiarF');
+  if (lf) lf.onclick = () => {
+    S.buscaAsig = ''; S.filtroPersona = ''; S.filtroCuando = ''; vistaAsignacion(m);
+  };
 
   m.querySelectorAll('[data-agrupar]').forEach(b => b.onclick = () => {
     S.agrupar = b.dataset.agrupar;
@@ -2218,16 +2252,32 @@ function vistaAsignacion(m) {
 
 function columnasPersonas() {
   const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
-  return [{ id: '', nombre: 'Sin asignar' }].concat(gente);
+  const cols = [{ id: '', nombre: 'Sin asignar' }].concat(gente);
+  if (S.filtroPersona === '__sin__') return [cols[0]];
+  return cols;
 }
 
-function columnaPersona(col, grupos) {
-  const suyos = S.procesos.filter(p => (p.responsable || '') === col.id);
+/** Un color por columna: con cinco personas, el borde de color ubica más
+    rápido que leer el nombre cada vez. */
+const COLORES_COL = ['#8494A2', '#5998B3', '#2E9E6B', '#D9862B', '#8E6FB5', '#C7503F', '#4E8AA6'];
+
+function pasaFiltros(p) {
+  const q = (S.buscaAsig || '').toLowerCase().trim();
+  if (q && ![p.nombre, p.codigo, p.area].join(' ').toLowerCase().includes(q)) return false;
+  if (S.filtroCuando && grupoDe(p, 'fecha') !== S.filtroCuando) {
+    if (!(S.filtroCuando === 'semana' && grupoDe(p, 'fecha') === 'hoy')) return false;
+  }
+  return true;
+}
+
+function columnaPersona(col, grupos, indice) {
+  const suyos = S.procesos.filter(p => (p.responsable || '') === col.id).filter(pasaFiltros);
   const av = suyos.length ? Math.round(suyos.reduce((t, p) => t + avance(p), 0) / suyos.length) : 0;
   const persona = S.equipo.find(u => u.id === col.id);
   const enMora = suyos.filter(p => grupoDe(p, 'fecha') === 'vencidos').length;
 
-  return `<div class="col" data-col="${col.id}">
+  const color = COLORES_COL[(indice || 0) % COLORES_COL.length];
+  return `<div class="col" data-col="${col.id}" style="--color-col:${color}">
     <div class="col-cab">
       ${persona ? puntoPresencia(persona) : ''}
       <b>${esc(col.nombre)}</b>
@@ -2238,7 +2288,7 @@ function columnaPersona(col, grupos) {
     <div class="col-cuerpo" data-drop="${col.id}">
       ${suyos.length ? grupos.map(g => {
         const delGrupo = suyos.filter(p => grupoDe(p, S.agrupar) === g.k)
-          .sort((a, b) => (a.fechaLimite || '9999').localeCompare(b.fechaLimite || '9999'));
+          .sort(porCercania);
         if (!delGrupo.length) return '';
         const clave = col.id + '|' + g.k;
         // La primera vez se decide por el grupo; después manda lo que la
@@ -2278,6 +2328,14 @@ function grupoDe(p, criterio) {
   if (f <= iso(finSemana)) return 'semana';
   if (f <= iso(finSig)) return 'siguiente';
   return 'despues';
+}
+
+/** De la fecha más cercana a la más lejana; lo que no tiene fecha, al final. */
+function porCercania(a, b) {
+  const fa = (a.fechaLimite || '').slice(0, 10) || '9999-99-99';
+  const fb = (b.fechaLimite || '').slice(0, 10) || '9999-99-99';
+  if (fa !== fb) return fa.localeCompare(fb);
+  return (a.nombre || '').localeCompare(b.nombre || '');
 }
 
 function tarjetaTablero(p) {
@@ -2489,6 +2547,14 @@ async function modalHistorial(p) {
   });
 }
 
+/** Solo el día, en corto: "jue 17 sep". */
+function fechaDia(iso) {
+  try {
+    return new Date(iso.slice(0, 10) + 'T00:00:00')
+      .toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
+  } catch (_) { return iso; }
+}
+
 function fechaLarga(iso) {
   try {
     return new Date(iso.replace(' ', 'T')).toLocaleString('es-CO',
@@ -2554,8 +2620,14 @@ function vistaAgenda(m) {
 
 /** Igual que el resto de la app, pero con "mañana" aparte: a la clínica le
     importa lo de hoy y lo que viene, no lo que ya se les pasó. */
+/** La fecha que manda para la clínica: la cita acordada; si no la han
+    puesto, la fecha de entrega que fijó la coordinación. */
+function fechaAgenda(p) {
+  return (p.fechaCita || p.fechaLimite || '').slice(0, 10);
+}
+
 function cajonAgenda(p) {
-  const f = (p.fechaLimite || '').slice(0, 10);
+  const f = fechaAgenda(p);
   if (!f) return 'sinfecha';
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const iso = d => d.toISOString().slice(0, 10);
@@ -2603,21 +2675,33 @@ function tarjetaAgenda(p) {
       ${listo ? '<span class="ok-marca" title="Ya tiene responsable">✓</span>' : ''}
     </div>
 
+    ${listo ? `<div class="cita-resuelta">
+      ${p.hora ? `<span class="hora">${esc(p.hora)}</span>` : '<span class="hora falta">sin hora</span>'}
+      <span class="quien">${esc(p.atiende)}</span>
+      ${p.fechaCita ? `<span class="tiny">${esc(fechaDia(p.fechaCita))}</span>` : ''}
+    </div>` : ''}
+
     <div class="agenda-campos">
-      <label>
+      <label class="campo-fecha">
+        <span class="lbl">Día de la cita</span>
+        <input type="date" data-fechacita="${p.id}" value="${esc((p.fechaCita || '').slice(0, 10))}">
+      </label>
+      <label class="campo-hora">
         <span class="lbl">Hora</span>
         <select data-hora="${p.id}">
-          <option value="">— Sin hora —</option>
+          <option value="">—</option>
           ${HORAS.map(h => `<option value="${h}" ${p.hora === h ? 'selected' : ''}>${h}</option>`).join('')}
         </select>
       </label>
-      <label>
+      <label class="campo-quien">
         <span class="lbl">¿Quién atiende?</span>
         <input type="text" data-atiende="${p.id}" value="${esc(p.atiende || '')}"
-          placeholder="Nombre y cargo" list="sug-atiende">
+          placeholder="Nombre y cargo de quien responde" list="sug-atiende">
       </label>
     </div>
-    ${p.contacto ? `<div class="tiny" style="margin-top:6px">Referencia dada: ${esc(p.contacto)}</div>` : ''}
+    <div class="tiny" style="margin-top:7px">
+      Entrega pedida: ${p.fechaLimite ? esc(fechaDia(p.fechaLimite)) : 'sin fecha'}${
+      p.contacto ? ' · referencia: ' + esc(p.contacto) : ''}</div>
 
     <details class="nota-plegable" ${conNota ? 'open' : ''}>
       <summary>${conNota ? '⚑ Tener en cuenta' : '+ Agregar nota para quien entrevista'}</summary>
@@ -2656,6 +2740,9 @@ function conectarAgenda(m) {
 
   m.querySelectorAll('[data-hora]').forEach(sel => sel.onchange = () =>
     guardar(sel.dataset.hora, { hora: sel.value }, { hora: sel.value }));
+
+  m.querySelectorAll('[data-fechacita]').forEach(inp => inp.onchange = () =>
+    guardar(inp.dataset.fechacita, { fechaCita: inp.value }, { fechaCita: inp.value }));
 
   const conRetraso = (el, fn) => {
     let t = null;
@@ -3148,33 +3235,55 @@ function conectarCuadroClinica(p) {
     quedó atrás al final y sin alarma, porque no es su tarea resolverlo. */
 function panelClinica(ps) {
   const activos = ps.filter(p => p.estado !== 'aprobado');
+
+  const fila = p => `<div class="cita-fila ${p.atiende ? 'lista' : 'falta'}" data-fila="${p.id}">
+    <div class="cf-hora">
+      <select data-hora="${p.id}" title="Hora de la cita">
+        <option value="">--:--</option>
+        ${HORAS.map(h => `<option value="${h}" ${p.hora === h ? 'selected' : ''}>${h}</option>`).join('')}
+      </select>
+    </div>
+    <div class="cf-datos">
+      <a class="cf-nom" href="#/proceso/${p.id}">${esc(p.nombre)}</a>
+      <div class="tiny">${esc(p.area || 'Sin área')} · lo levanta ${esc(nombrePersona(p.responsable))}</div>
+    </div>
+    <div class="cf-quien">
+      <input type="text" data-atiende="${p.id}" value="${esc(p.atiende || '')}"
+        placeholder="¿Quién atiende?" list="sug-atiende">
+    </div>
+    <div class="cf-fecha">
+      <input type="date" data-fechacita="${p.id}" value="${esc((p.fechaCita || '').slice(0, 10))}"
+        title="Día de la cita">
+    </div>
+    <span class="tiny cf-eco" data-eco="${p.id}"></span>
+  </div>`;
+
   const caja = (k, titulo, vacio, clase) => {
     const lista = activos.filter(p => cajonAgenda(p) === k)
-      .sort((a, b) => (a.hora || '99').localeCompare(b.hora || '99'));
+      .sort((a, b) => (a.hora || '99:99').localeCompare(b.hora || '99:99'));
     return `<div class="card panel-urg ${lista.length ? clase : ''}">
       <h3>${titulo} <span class="cuenta-urg">${lista.length}</span></h3>
-      ${lista.length ? `<div class="urg-lista">${lista.map(p => `
-        <a class="urg-item" href="#/proceso/${p.id}">
-          <span class="urg-nom">${p.hora ? `<b class="hora">${esc(p.hora)}</b> ` : ''}${esc(p.nombre)}</span>
-          <span class="urg-meta">${esc(p.area || 'Sin área')} · lo levanta ${esc(nombrePersona(p.responsable))}</span>
-          <span class="urg-der">${p.atiende
-            ? `<span class="tiny">atiende ${esc(p.atiende)}</span>`
-            : '<span class="falta-asig">falta asignar</span>'}</span>
-        </a>`).join('')}</div>` : `<div class="mut">${vacio}</div>`}
+      ${lista.length
+        ? `<div class="citas">${lista.map(fila).join('')}</div>`
+        : `<div class="mut">${vacio}</div>`}
     </div>`;
   };
 
   const atrasados = activos.filter(p => cajonAgenda(p) === 'vencidos');
 
-  return `<div class="grid g2" style="margin-bottom:18px">
-    ${caja('hoy', 'Hoy vienen a levantar', 'Hoy no hay ninguno programado.', 'activo')}
-    ${caja('manana', 'Mañana', 'Mañana no hay nada agendado todavía.', 'manana')}
-  </div>
-  ${atrasados.length ? `<div class="tiny" style="margin-bottom:18px;padding:10px 14px;
-    background:var(--surface-2);border-radius:10px">
-    ${atrasados.length} proceso(s) quedaron pasados de fecha y el equipo los reprogramará:
-    ${atrasados.slice(0, 5).map(p => esc(p.nombre)).join(' · ')}
-  </div>` : ''}`;
+  return `<p class="mut" style="margin-top:-8px">
+      Escriba aquí mismo quién atiende, el día y la hora. Se guarda solo.</p>
+
+    <div class="grid g2" style="margin:14px 0 18px">
+      ${caja('hoy', 'Hoy vienen a levantar', 'Hoy no hay ninguno programado.', 'activo')}
+      ${caja('manana', 'Mañana', 'Mañana no hay nada agendado todavía.', 'manana')}
+    </div>
+
+    ${atrasados.length ? `<div class="tiny" style="margin-bottom:18px;padding:11px 15px;
+      background:var(--surface-2);border-radius:10px">
+      ${atrasados.length} proceso(s) quedaron pasados de fecha y el equipo los reprogramará:
+      ${atrasados.slice(0, 5).map(p => esc(p.nombre)).join(' · ')}
+    </div>` : ''}`;
 }
 
 function vistaAvanceClinica(m) {
@@ -3242,6 +3351,7 @@ function vistaAvanceClinica(m) {
   </div>`;
 
   document.getElementById('proponer').onclick = modalProponer;
+  conectarAgenda(m);
 }
 
 /* ═══════════════════════════════════════════════════════════════

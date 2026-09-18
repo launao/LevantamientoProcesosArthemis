@@ -185,6 +185,7 @@ def _procesos(solo_de=None):
             "contacto": p.get("contacto") or "",
             "atiende": p.get("atiende") or "",
             "hora": p.get("hora") or "",
+            "fechaCita": str(p.get("fecha_cita") or ""),
             "notasClinica": p.get("notas_clinica") or "",
             "notaRevision": p.get("nota_revision") or "",
             "revisadoEn": str(p.get("revisado_en") or ""),
@@ -423,6 +424,13 @@ def designar_atiende(pid):
         hora = (d.get("hora") or "").strip()[:5]
         campos.append("hora=?")
         params.append(hora if re.match(r"^\d{2}:\d{2}$", hora) else None)
+    # La fecha de la cita es distinta de la fecha de entrega: la entrega la
+    # fija la coordinación, la cita la acuerda la clínica según cuándo
+    # puede atender su gente.
+    if "fechaCita" in d:
+        fecha = (d.get("fechaCita") or "").strip()[:10]
+        campos.append("fecha_cita=?")
+        params.append(fecha if re.match(r"^\d{4}-\d{2}-\d{2}$", fecha) else None)
     if not campos:
         return jsonify({"ok": True})
 

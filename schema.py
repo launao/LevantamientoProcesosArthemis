@@ -186,6 +186,7 @@ COLUMNAS_NUEVAS = [
     ("procesos", "nota_revision", "TEXT"),
     ("procesos", "revisado_en", "TEXT"),
     ("procesos", "hora", "TEXT"),
+    ("procesos", "fecha_cita", "TEXT"),
 ]
 
 
