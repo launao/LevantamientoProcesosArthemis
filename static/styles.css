@@ -759,3 +759,15 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
   padding:16px;margin-bottom:14px;background:var(--surface)}
 .modulo .lbl{font-size:12.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--ink-3);
   font-weight:700;display:block;margin-bottom:5px}
+
+/* ── La cita dentro del proceso ───────────────── */
+.bloque-cita{border:1.5px solid var(--line-2);border-radius:10px;padding:15px 17px;margin-top:14px;
+  background:var(--surface-2)}
+.bloque-cita.listo{border-color:color-mix(in srgb,var(--ok) 45%,transparent);
+  background:color-mix(in srgb,var(--ok) 7%,transparent)}
+.bloque-cita.solo-ver{background:var(--surface-2)}
+.bc-et{font-size:13px;letter-spacing:.9px;text-transform:uppercase;font-weight:700;color:var(--ink-2)}
+.bc-et:before{content:'◷ '}
+.bloque-cita .lbl{font-size:13.5px}
+.bloque-cita input,.bloque-cita select{font-size:16px}
+.por-confirmar{color:var(--warn);font-weight:600}

@@ -399,6 +399,22 @@ function vistaTablero(m) {
    —lo propio o lo de todos— y si se muestra o no de quién es.
    ═══════════════════════════════════════════════════════════════ */
 /** Un color estable por persona, para reconocerla sin leer el nombre. */
+/** Quién va a atender. Si nadie lo ha confirmado, se usa la referencia
+    que quedó anotada, marcada como tentativa: es mejor que un hueco. */
+function contraparte(p) {
+  if (p.atiende) return { nombre: p.atiende, confirmada: true };
+  if (p.contacto) return { nombre: p.contacto, confirmada: false };
+  return null;
+}
+
+function contraparteHTML(p) {
+  const c = contraparte(p);
+  if (!c) return '· <span class="falta-asig">falta la contraparte</span>';
+  return c.confirmada
+    ? `· atiende <b>${esc(c.nombre)}</b>`
+    : `· <span class="por-confirmar" title="Es la referencia anotada; nadie la ha confirmado">${esc(c.nombre)} (por confirmar)</span>`;
+}
+
 function colorPersona(id) {
   const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
   const i = gente.findIndex(u => u.id === id);
@@ -417,7 +433,7 @@ function panelHoyVencidos(ps, opciones) {
     <span class="urg-meta">
       ${esc(p.area || 'Sin área')}
       ${conDueno ? `· <span class="tag-persona" style="--tp:${colorPersona(p.responsable)}">${esc(nombrePersona(p.responsable))}</span>` : ''}
-      ${p.atiende ? `· atiende <b>${esc(p.atiende)}</b>` : '· <span class="falta-asig">falta la contraparte</span>'}
+      ${contraparteHTML(p)}
     </span>
     <span class="urg-der">
       ${textoPlazo(p.fechaLimite).html}
@@ -628,7 +644,7 @@ function wDia(ps, cajon, titulo, vacio) {
         <span class="urg-meta">
           ${esc(p.area || 'Sin área')} ·
           <span class="tag-persona" style="--tp:${colorPersona(p.responsable)}">${esc(nombrePersona(p.responsable))}</span>
-          ${p.atiende ? `· atiende <b>${esc(p.atiende)}</b>` : '· <span class="falta-asig">falta la contraparte</span>'}
+          ${contraparteHTML(p)}
         </span>
         <span class="urg-der"><span class="tiny">${avance(p)}%</span></span>
       </a>`).join('')}</div>` : `<div class="mut">${vacio}</div>`}
@@ -855,7 +871,7 @@ function vistaProcesos(m) {
 function bandejasProcesos(ps) {
   const huerfanos = ps.filter(p => !p.responsable && p.estado !== 'aprobado');
   const sinCita = ps.filter(p => p.responsable && p.estado !== 'aprobado'
-    && p.estado !== 'en_revision' && (!p.fechaCita || !p.atiende));
+    && p.estado !== 'en_revision' && (!p.hora || !p.atiende));
 
   if (!huerfanos.length && !sinCita.length) return '';
 
@@ -875,10 +891,10 @@ function bandejasProcesos(ps) {
 
     ${sinCita.length ? `<div class="card bandeja">
       <h3>Falta confirmar la cita <span class="cuenta-urg">${sinCita.length}</span></h3>
-      <p class="tiny">Tienen responsable, pero la clínica todavía no dijo quién atiende o qué día.</p>
+      <p class="tiny">Tienen responsable, pero falta confirmar quién atiende de la clínica o a qué hora.</p>
       <div class="bandeja-lista">${sinCita.map(p => mini(p, x =>
-        !x.atiende && !x.fechaCita ? 'sin contraparte ni día'
-        : !x.atiende ? 'sin contraparte' : 'sin día')).join('')}</div>
+        !x.atiende && !x.hora ? 'sin contraparte ni hora'
+        : !x.atiende ? 'sin confirmar quién atiende' : 'sin hora')).join('')}</div>
     </div>` : ''}
   </div>`;
 }
@@ -1075,6 +1091,7 @@ function vistaProceso(m) {
       <div class="cc-lectura">${esc(p.notaRevision)}</div>
       <div class="tiny" style="margin-top:8px">Cuando lo corrijas, vuelve a pulsar Enviar.</div>
     </div>` : ''}
+    ${bloqueCita(p)}
     ${cuadroClinica(p)}
     ${p.enviosTotal ? `<div class="aviso-env tiny" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:color-mix(in srgb,var(--ok) 12%,transparent)">
       ✓ Enviado ${p.enviosTotal} ${p.enviosTotal === 1 ? 'vez' : 'veces'}. Puedes seguir editando y subiendo; al reenviar se actualiza el informe con el mismo enlace.
@@ -1085,6 +1102,7 @@ function vistaProceso(m) {
   </div>
   <div id="secciones"></div>`;
 
+  conectarCita(p);
   conectarCuadroClinica(p);
 
   const bGuardar = document.getElementById('btnGuardar');
@@ -4518,4 +4536,92 @@ function verLote(x) {
       } catch (_) { toast('No se pudo copiar'); }
     };
   });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   La cita, dentro del proceso
+
+   Antes solo se podía programar desde la agenda de la clínica, lo que
+   obligaba a cambiar de pantalla para algo que se decide justo aquí.
+   La fecha de entrega es del administrador; el día, la hora y la
+   contraparte los pueden poner tanto la coordinación como la clínica.
+   ═══════════════════════════════════════════════════════════════ */
+function bloqueCita(p) {
+  const puede = esAdmin() || esClinica();
+  const listo = !!(p.atiende && p.hora);
+
+  if (!puede) {
+    if (!p.atiende && !p.hora && !p.fechaCita) return '';
+    return `<div class="bloque-cita solo-ver">
+      <span class="bc-et">La cita</span>
+      <div class="cita-resuelta" style="margin:0">
+        ${p.hora ? `<span class="hora">${esc(p.hora)}</span>` : '<span class="hora falta">sin hora</span>'}
+        <span class="quien">${esc(p.atiende || 'sin contraparte')}</span>
+        ${p.fechaCita ? `<span class="tiny">${esc(fechaDia(p.fechaCita))}</span>` : ''}
+      </div>
+    </div>`;
+  }
+
+  return `<div class="bloque-cita ${listo ? 'listo' : ''}">
+    <div class="flex" style="margin-bottom:10px">
+      <span class="bc-et">La cita</span>
+      <span class="tiny" id="citaEco"></span>
+      ${p.contacto && !p.atiende
+        ? `<button class="btn sm right" id="usarContacto">Usar «${esc(recortar(p.contacto, 22))}»</button>` : ''}
+    </div>
+    <div class="grid g3" style="gap:10px">
+      <label class="f" style="margin:0"><span class="lbl">Día de la entrevista</span>
+        <input type="date" id="cFecha" value="${esc((p.fechaCita || '').slice(0, 10))}"></label>
+      <label class="f" style="margin:0"><span class="lbl">Hora</span>
+        <select id="cHora">
+          <option value="">— Sin hora —</option>
+          ${HORAS.map(h => `<option value="${h}" ${p.hora === h ? 'selected' : ''}>${h}</option>`).join('')}
+        </select></label>
+      <label class="f" style="margin:0"><span class="lbl">¿Quién atiende de la clínica?</span>
+        <input type="text" id="cAtiende" value="${esc(p.atiende || '')}"
+          placeholder="Nombre y cargo de quien responde"></label>
+    </div>
+    <div class="tiny" style="margin-top:7px">
+      Esto es lo que sale en el tablero del día. La <b>fecha de entrega</b> de arriba es
+      otra cosa: es cuándo se necesita el proceso terminado.
+    </div>
+  </div>`;
+}
+
+function conectarCita(p) {
+  const fecha = document.getElementById('cFecha');
+  if (!fecha) return;
+  const hora = document.getElementById('cHora');
+  const atiende = document.getElementById('cAtiende');
+  const eco = document.getElementById('citaEco');
+
+  const guardar = cuerpo => {
+    if (eco) eco.textContent = 'Guardando…';
+    api('/procesos/' + p.id + '/atiende', { method: 'PUT', body: cuerpo })
+      .then(() => {
+        Object.assign(p, cuerpo);
+        const enLista = S.procesos.find(x => x.id === p.id);
+        if (enLista) Object.assign(enLista, cuerpo);
+        if (eco) { eco.textContent = 'Guardado ✓'; setTimeout(() => { eco.textContent = ''; }, 1800); }
+      })
+      .catch(() => { if (eco) eco.textContent = 'No se pudo guardar'; });
+  };
+
+  fecha.onchange = () => guardar({ fechaCita: fecha.value });
+  hora.onchange = () => guardar({ hora: hora.value });
+
+  let t = null;
+  atiende.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(() => guardar({ atiende: atiende.value }), 700);
+  };
+
+  // Atajo: casi siempre quien atiende es la persona que ya se anotó como
+  // referencia. Se ofrece en un clic en vez de hacer que la reescriban.
+  const usar = document.getElementById('usarContacto');
+  if (usar) usar.onclick = () => {
+    atiende.value = p.contacto;
+    guardar({ atiende: p.contacto });
+    usar.remove();
+  };
 }
