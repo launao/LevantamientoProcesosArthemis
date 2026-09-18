@@ -137,6 +137,16 @@ def _ddl():
               creado      {ts}
             )""",
 
+        f"""CREATE TABLE IF NOT EXISTS analisis_lote (
+              id          {txt} PRIMARY KEY,
+              procesos    {txt} NOT NULL,
+              contenido   {txt} NOT NULL,
+              titulo      {txt},
+              modelo      {txt},
+              pedido_por  {txt},
+              creado      {ts}
+            )""",
+
         f"""CREATE TABLE IF NOT EXISTS secretos (
               clave  {txt} PRIMARY KEY,
               valor  {txt} NOT NULL,
@@ -187,6 +197,7 @@ COLUMNAS_NUEVAS = [
     ("procesos", "revisado_en", "TEXT"),
     ("procesos", "hora", "TEXT"),
     ("procesos", "fecha_cita", "TEXT"),
+    ("procesos", "nota_vista", "TEXT"),
 ]
 
 

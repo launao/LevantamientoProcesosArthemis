@@ -187,6 +187,7 @@ def _procesos(solo_de=None):
             "hora": p.get("hora") or "",
             "fechaCita": str(p.get("fecha_cita") or ""),
             "notasClinica": p.get("notas_clinica") or "",
+            "notaVista": p.get("nota_vista") or "",
             "notaRevision": p.get("nota_revision") or "",
             "revisadoEn": str(p.get("revisado_en") or ""),
             "propuestoPor": p.get("propuesto_por") or "",
@@ -585,6 +586,82 @@ def _imagenes_para_ia(pid, plantilla, evidencias):
     return salida
 
 
+@api.post("/analisis-lote")
+@rol_required("admin")
+def analizar_lote():
+    """Mira varios procesos juntos: cómo se encadenan, qué se repite y qué
+    módulos saldrían de ahí."""
+    d = request.get_json(silent=True) or {}
+    ids = [x for x in (d.get("procesos") or []) if isinstance(x, str)][:12]
+    if len(ids) < 2:
+        return jsonify({"error": "pocos_procesos"}), 422
+
+    plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
+    nombres = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM usuarios")}
+    todos = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM procesos")}
+
+    bloques, imagenes, incluidos = [], [], []
+    # El cupo de fotos se reparte entre los procesos elegidos, para que
+    # ninguno acapare y todos aporten evidencia.
+    cupo = max(1, ia.MAX_IMAGENES * 2 // max(1, len(ids)))
+
+    for pid in ids:
+        p = D.row("SELECT * FROM procesos WHERE id=? AND COALESCE(eliminado,0)=0", (pid,))
+        if not p:
+            continue
+        respuestas = D.jload(p["respuestas"], {})
+        evidencias = D.rows("SELECT tipo, nota, campo_id, duracion, media_id "
+                            "FROM evidencias WHERE proceso_id=? ORDER BY creado", (pid,))
+        bloques.append(ia.armar_texto(p, plantilla, respuestas, nombres, todos, evidencias))
+        incluidos.append(p["nombre"])
+        for img in _imagenes_para_ia(pid, plantilla, evidencias)[:cupo]:
+            img["proceso"] = p["nombre"]
+            imagenes.append(img)
+
+    if len(bloques) < 2:
+        return jsonify({"error": "pocos_procesos"}), 422
+
+    try:
+        analisis, modelo, uso = ia.analizar_lote(bloques, imagenes)
+    except ia.IAError as e:
+        auditar("lote_fallido", "analisis", None, f"{e.codigo}: {e.detalle[:100]}")
+        return jsonify({"error": e.codigo, "detalle": e.detalle,
+                        "crudo": (e.crudo or "")[:4000], "contexto": e.extra}), 502
+
+    u = usuario_actual()
+    lid = _nuevo_id("lo_")
+    titulo = (d.get("titulo") or f"{len(incluidos)} procesos").strip()[:120]
+    D.execute("INSERT INTO analisis_lote (id, procesos, contenido, titulo, modelo, pedido_por) "
+              "VALUES (?,?,?,?,?,?)",
+              (lid, D.jdump(ids), D.jdump(analisis), titulo, modelo, u["id"]))
+    auditar("lote_generado", "analisis", lid,
+            f"{len(incluidos)} procesos, {len(imagenes)} fotos")
+
+    return jsonify({"ok": True, "id": lid, "analisis": analisis, "modelo": modelo,
+                    "uso": uso, "procesos": incluidos, "fotos": len(imagenes)})
+
+
+@api.get("/analisis-lote")
+@rol_required("admin")
+def listar_lotes():
+    nombres = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM usuarios")}
+    procesos = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM procesos")}
+    filas = D.rows("SELECT * FROM analisis_lote ORDER BY creado DESC LIMIT 30")
+    return jsonify({"lotes": [{
+        "id": f["id"], "titulo": f["titulo"], "modelo": f["modelo"],
+        "creado": str(f["creado"]), "por": nombres.get(f["pedido_por"], ""),
+        "procesos": [procesos.get(x, x) for x in D.jload(f["procesos"], [])],
+        "contenido": D.jload(f["contenido"], {}),
+    } for f in filas]})
+
+
+@api.delete("/analisis-lote/<lid>")
+@rol_required("admin")
+def borrar_lote(lid):
+    D.execute("DELETE FROM analisis_lote WHERE id=?", (lid,))
+    return jsonify({"ok": True})
+
+
 @api.get("/procesos/<pid>/analisis")
 @rol_required("admin")
 def listar_analisis(pid):
@@ -668,6 +745,22 @@ def revisar_proceso(pid):
               (estado, nota, _now(), pid))
     auditar("proceso_" + decision, "proceso", pid, nota[:120])
     return jsonify({"ok": True, "estado": estado})
+
+
+@api.post("/procesos/<pid>/nota-vista")
+@rol_required("admin")
+def marcar_nota_vista(pid):
+    """Da por leída la nota de la clínica.
+
+    Se guarda el texto exacto que se leyó, no una marca de tiempo: si la
+    clínica escribe algo nuevo, el aviso vuelve a aparecer solo.
+    """
+    p = D.row("SELECT notas_clinica FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    D.execute("UPDATE procesos SET nota_vista=? WHERE id=?",
+              (p["notas_clinica"] or "", pid))
+    return jsonify({"ok": True})
 
 
 @api.get("/indice")

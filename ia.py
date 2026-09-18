@@ -266,13 +266,13 @@ Las listas pueden ir vacías si no hay nada que decir. Prefiere tres cosas buena
 diez de relleno."""
 
 
-def _pedir(llave, modelo, contenido, max_tokens=8000):
+def _pedir(llave, modelo, contenido, max_tokens=8000, sistema=None):
     if isinstance(contenido, str):
         contenido = [{"type": "text", "text": contenido}]
     cuerpo = json.dumps({
         "model": modelo,
         "max_tokens": max_tokens,
-        "system": SISTEMA,
+        "system": sistema or SISTEMA,
         "messages": [{"role": "user", "content": contenido}],
     }).encode("utf-8")
 
@@ -457,6 +457,107 @@ def analizar(texto_proceso, lista_procesos, imagenes=None, modelo=None):
         except IAError:
             raise e
 
+    return analisis, contexto["modelo"], {
+        "entrada": contexto["tokens_entrada"],
+        "salida": contexto["tokens_salida"],
+        "corte": contexto["stop_reason"],
+    }
+
+
+SISTEMA_LOTE = """Eres un arquitecto de sistemas de información en salud. Recibes \
+varios levantamientos de procesos de una misma clínica y tu trabajo es mirarlos \
+en conjunto, no uno por uno.
+
+Este análisis alimenta el diseño de los módulos de un sistema que va a reemplazar \
+lo que hoy hacen en papel y en herramientas sueltas. Así que lo que digas tiene \
+consecuencias: si agrupas mal, se construye un módulo que nadie usa.
+
+Reglas:
+- No inventes. Si dos procesos parecen conectar pero nadie lo dijo, márcalo como \
+hipótesis con confianza baja, no como hecho.
+- Las fotos son evidencia de primera mano: un formato en papel fotografiado te dice \
+exactamente qué campos necesita una pantalla. Léelas con atención y sé específico: \
+nombra los campos que ves.
+- Busca lo que se repite. Si tres procesos piden los mismos datos del paciente, eso \
+es una sola funcionalidad, no tres.
+- Distingue el proceso de la herramienta. "Lo llevan en Excel" no es un proceso, es \
+un síntoma.
+- En español de Colombia, concreto. Quien lee esto va a construir software.
+
+Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor ni marcas de código:
+
+{
+  "panorama": "6 a 10 líneas sobre qué muestran estos procesos vistos juntos",
+  "cadenas": [
+    {"nombre": "cómo llamarías a esta cadena de trabajo",
+     "procesos": ["nombres exactos, en el orden en que ocurren"],
+     "descripcion": "qué recorre el caso de punta a punta",
+     "rupturas": ["dónde se rompe la cadena hoy: reprocesos, saltos a papel, datos que se repiten"]}
+  ],
+  "conexiones": [
+    {"de": "nombre exacto", "a": "nombre exacto",
+     "que_pasa": "qué se entrega concretamente",
+     "confianza": "alta | media | baja",
+     "declarada": true}
+  ],
+  "duplicidades": [
+    {"que_se_repite": "el dato, la validación o el paso que aparece en varios",
+     "procesos": ["nombres"],
+     "propuesta": "cómo resolverlo de una sola vez"}
+  ],
+  "modulos_sugeridos": [
+    {"modulo": "nombre del módulo",
+     "cubre": ["nombres de los procesos que quedarían dentro"],
+     "funciones": ["qué tiene que saber hacer, en frases concretas"],
+     "datos_clave": ["los campos que vio en las fotos y formatos, con su nombre real"],
+     "prioridad": "alta | media | baja",
+     "por_que": "qué dolor concreto resuelve"}
+  ],
+  "hallazgos_en_fotos": [
+    {"foto": 1, "proceso": "a qué proceso pertenece", "observacion": "qué se ve, con detalle: campos, sellos, casillas"}
+  ],
+  "vacios": ["qué falta levantar para poder diseñar con seguridad"],
+  "siguiente_paso": "qué haría usted primero, en una frase"
+}
+
+Las listas pueden ir vacías. Prefiere precisión a cantidad."""
+
+
+def analizar_lote(bloques, imagenes=None, modelo=None):
+    """Analiza varios procesos juntos: relaciones, duplicidades y módulos.
+
+    bloques: lista de textos, uno por proceso, ya armados.
+    """
+    llave = leer_llave()
+    if not llave:
+        raise IAError("sin_llave")
+
+    modelo = modelo or MODELO_DEFECTO
+    prompt = ("Analiza estos " + str(len(bloques)) + " procesos EN CONJUNTO.\n\n"
+              + "\n\n" + ("=" * 60) + "\n\n".join(bloques))
+
+    contenido = [{"type": "text", "text": prompt}]
+    for i, img in enumerate(imagenes or []):
+        contenido.append({"type": "text",
+                          "text": f"\nFoto {i+1} — proceso «{img['proceso']}», en «{img['etiqueta']}»:"})
+        contenido.append({"type": "image", "source": {
+            "type": "base64", "media_type": img["tipo"],
+            "data": base64.b64encode(img["datos"]).decode("ascii")}})
+    if imagenes:
+        contenido.append({"type": "text", "text":
+            "\nLas fotos son la mejor fuente para 'datos_clave': cuando veas un formato, "
+            "enumera los campos que pide. Eso es lo que va a tener que tener la pantalla."})
+
+    data = _pedir(llave, modelo, contenido, max_tokens=16000, sistema=SISTEMA_LOTE)
+    texto = "".join(b.get("text", "") for b in data.get("content", [])
+                    if b.get("type") == "text")
+    uso = data.get("usage", {})
+    contexto = {"stop_reason": data.get("stop_reason"),
+                "modelo": data.get("model", modelo),
+                "tokens_salida": uso.get("output_tokens", 0),
+                "tokens_entrada": uso.get("input_tokens", 0),
+                "caracteres": len(texto)}
+    analisis = _extraer_json(texto, contexto)
     return analisis, contexto["modelo"], {
         "entrada": contexto["tokens_entrada"],
         "salida": contexto["tokens_salida"],

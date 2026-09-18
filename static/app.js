@@ -340,7 +340,8 @@ function render() {
       </div>
     </aside>
     <main class="main" id="main"></main>
-  </div>`;
+  </div>
+  ${puedeEditar() ? '<button class="flotante" id="nuevoFlotante" title="Crear un proceso">+ Nuevo proceso</button>' : ''}`;
 
   r.querySelectorAll('.nav button').forEach(b => b.onclick = () => {
     S.vista = b.dataset.v; S.procId = null; S.draft = null; S.editandoPlantilla = false;
@@ -397,16 +398,27 @@ function vistaTablero(m) {
    el rol: qué toca hoy y qué se quedó atrás. Cambia solo el alcance
    —lo propio o lo de todos— y si se muestra o no de quién es.
    ═══════════════════════════════════════════════════════════════ */
+/** Un color estable por persona, para reconocerla sin leer el nombre. */
+function colorPersona(id) {
+  const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
+  const i = gente.findIndex(u => u.id === id);
+  return COLORES_COL[(i < 0 ? 0 : i + 1) % COLORES_COL.length];
+}
+
 function panelHoyVencidos(ps, opciones) {
   const conDueno = (opciones || {}).conDueno;
-  const hoy = ps.filter(p => grupoDe(p, 'fecha') === 'hoy').sort(porCercania);
+  const hoy = ps.filter(p => grupoDe(p, 'fecha') === 'hoy')
+    .sort((a, b) => (a.hora || '99:99').localeCompare(b.hora || '99:99'));
   const vencidos = ps.filter(p => grupoDe(p, 'fecha') === 'vencidos').sort(porCercania);
 
-  const linea = p => `<a class="urg-item" href="#/proceso/${p.id}">
+  const linea = p => `<a class="urg-item con-hora" href="#/proceso/${p.id}">
+    <span class="urg-hora">${p.hora ? esc(p.hora) : '<i>sin hora</i>'}</span>
     <span class="urg-nom">${esc(p.nombre)}</span>
-    <span class="urg-meta">${esc(p.area || 'Sin área')}${
-      conDueno ? ' · ' + esc(nombrePersona(p.responsable)) : ''}${
-      p.atiende ? ' · atiende ' + esc(p.atiende) : ''}</span>
+    <span class="urg-meta">
+      ${esc(p.area || 'Sin área')}
+      ${conDueno ? `· <span class="tag-persona" style="--tp:${colorPersona(p.responsable)}">${esc(nombrePersona(p.responsable))}</span>` : ''}
+      ${p.atiende ? `· atiende <b>${esc(p.atiende)}</b>` : '· <span class="falta-asig">falta la contraparte</span>'}
+    </span>
     <span class="urg-der">
       ${textoPlazo(p.fechaLimite).html}
       <span class="tiny">${avance(p)}%</span>
@@ -471,19 +483,60 @@ function tableroPersonal(m) {
   m.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => abrirProceso(tr.dataset.id));
 }
 
-/** Lo que ve el administrador: el total y el detalle de cada persona. */
+/* ═══════════════════════════════════════════════════════════════
+   Tablero del administrador, por piezas
+
+   Cada bloque es un widget independiente que se puede esconder o
+   reordenar. El orden por defecto responde a cómo se mira un día de
+   trabajo: cómo vamos hoy, qué pasa hoy, qué pasa mañana, qué me están
+   avisando, y solo después los totales.
+   ═══════════════════════════════════════════════════════════════ */
+const WIDGETS = [
+  { k: 'progreso', n: 'Progreso del día' },
+  { k: 'hoy',      n: 'Lo de hoy' },
+  { k: 'manana',   n: 'Lo de mañana' },
+  { k: 'avisos',   n: 'Avisos de la clínica' },
+  { k: 'vencidos', n: 'Pasados de fecha' },
+  { k: 'totales',  n: 'Totales del proyecto' },
+  { k: 'personas', n: 'Cada persona' },
+  { k: 'estados',  n: 'Por estado' },
+  { k: 'areas',    n: 'Por área' }
+];
+
+function prefsWidgets() {
+  if (S.prefsW) return S.prefsW;
+  let g = {};
+  try { g = JSON.parse(localStorage.getItem('lp_widgets') || '{}'); } catch (_) {}
+  S.prefsW = {
+    orden: Array.isArray(g.orden) ? g.orden : WIDGETS.map(w => w.k),
+    ocultos: Array.isArray(g.ocultos) ? g.ocultos : []
+  };
+  return S.prefsW;
+}
+function guardarWidgets() {
+  try { localStorage.setItem('lp_widgets', JSON.stringify(prefsWidgets())); } catch (_) {}
+}
+
 function tableroAdmin(m) {
   const ps = S.procesos;
-  const porEstado = k => ps.filter(p => (p.estado || 'pendiente') === k).length;
-  const fotos = ps.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'foto').length, 0);
-  const audios = ps.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'audio').length, 0);
-  const av = avanceGlobal();
-
   const filtrados = ps.filter(pasaFiltros);
+  const prefs = prefsWidgets();
+
+  const piezas = {
+    progreso: () => wProgresoDia(filtrados),
+    hoy:      () => wDia(filtrados, 'hoy', 'Hoy vienen a levantar', 'Hoy no hay ninguno programado.'),
+    manana:   () => wDia(filtrados, 'manana', 'Mañana', 'Mañana todavía no hay nada.'),
+    avisos:   () => wAvisos(ps),
+    vencidos: () => wVencidos(filtrados),
+    totales:  () => wTotales(ps, filtrados),
+    personas: () => wPersonas(filtrados),
+    estados:  () => wEstados(filtrados),
+    areas:    () => wAreas(filtrados)
+  };
 
   m.innerHTML = `
   <div class="topbar"><h1>Tablero</h1><div class="sp"></div>
-    <button class="btn p" id="nuevoTab">+ Nuevo proceso</button></div>
+    <button class="btn sm" id="organizarW">⚙ Bloques</button></div>
 
   <div class="card filtros-asig" style="grid-template-columns:1.5fr 1fr 1fr auto">
     <input type="text" id="tBusca" placeholder="Buscar un proceso…" value="${esc(S.buscaAsig || '')}">
@@ -503,64 +556,8 @@ function tableroAdmin(m) {
       ? '<button class="btn sm" id="tLimpiar">Quitar filtros</button>' : ''}
   </div>
 
-  ${panelClinica(ps)}
-
-  <div class="grid g4" style="margin-bottom:16px">
-    <div class="kpi"><div class="n">${ps.length}</div><div class="t">Procesos en total</div></div>
-    <div class="kpi"><div class="n">${av}%</div><div class="t">Avance promedio</div>
-      <div class="bar" style="margin-top:8px"><i style="width:${av}%"></i></div></div>
-    <div class="kpi"><div class="n">${porEstado('en_revision') + porEstado('aprobado')}</div><div class="t">Enviados</div></div>
-    <div class="kpi"><div class="n">${fotos} / ${audios}</div><div class="t">Fotos / notas de voz</div></div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px"><h3>Cada persona</h3>
-    <div class="grid g2">
-      ${columnasPersonas().filter(c => c.id).map(pe => {
-        const sub = filtrados.filter(p => p.responsable === pe.id);
-        const x = sub.length ? Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length) : 0;
-        const env = sub.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
-        const tarde = sub.filter(p => { const pl = textoPlazo(p.fechaLimite); return pl.dias !== null && pl.dias < 0 && p.estado !== 'aprobado'; }).length;
-        return `<div class="persona-card" data-persona="${pe.id}">
-          <div class="flex" style="margin-bottom:8px">
-            <div class="avatar">${esc((pe.nombre || '?').trim()[0].toUpperCase())}
-              ${puntoPresencia(pe)}</div>
-            <div style="flex:1"><b>${esc(pe.nombre)}</b>
-              <div class="tiny">${sub.length} asignado(s) · ${env} enviado(s)${tarde ? ` · <span class="plazo vencido">${tarde} en mora</span>` : ''}</div>
-              <div class="tiny">${esc(presencia(pe).texto)}</div></div>
-            <div style="text-align:right"><b style="font-size:18px">${x}%</b></div>
-          </div>
-          <div class="bar"><i style="width:${x}%"></i></div>
-          ${sub.length ? `<div class="mini-lista">${[...sub].sort(porCercania).slice(0, 5).map(p =>
-              `<a class="mini-item" href="#/proceso/${p.id}">
-                 <span class="mini-fecha">${p.fechaLimite ? esc(fechaDia(p.fechaLimite).replace(/^\w+ /, '')) : '—'}</span>
-                 <span class="mini-nom">${esc(recortar(p.nombre, 28))}</span></a>`).join('')}${
-              sub.length > 5 ? `<div class="tiny" style="padding-top:4px">y ${sub.length - 5} más</div>` : ''}</div>` : ''}
-        </div>`;
-      }).join('') || '<div class="mut">Agrega personas en Equipo.</div>'}
-    </div>
-  </div>
-
-  <div class="grid g2">
-    <div class="card"><h3>Por estado</h3>
-      ${ESTADOS.map(e => {
-        const n = porEstado(e.k), pc = ps.length ? Math.round(n / ps.length * 100) : 0;
-        return `<div style="margin-bottom:11px"><div class="flex" style="font-size:13px;margin-bottom:4px">
-          <span>${esc(e.n)}</span><span class="right mut">${n}</span></div>
-          <div class="bar"><i style="width:${pc}%"></i></div></div>`;
-      }).join('')}
-    </div>
-    <div class="card"><h3>Por área</h3>
-      ${(S.config.areas || []).map(a => {
-        const sub = ps.filter(p => p.area === a); if (!sub.length) return '';
-        const x = Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length);
-        return `<div style="margin-bottom:10px"><div class="flex" style="font-size:13px;margin-bottom:4px">
-          <span>${esc(a)}</span><span class="right mut">${sub.length} · ${x}%</span></div>
-          <div class="bar"><i style="width:${x}%"></i></div></div>`;
-      }).join('') || '<div class="mut">Aún no hay procesos por área.</div>'}
-    </div>
-  </div>`;
-
-  document.getElementById('nuevoTab').onclick = modalNuevoProceso;
+  ${prefs.orden.filter(k => !prefs.ocultos.includes(k))
+    .map(k => (piezas[k] || (() => ''))()).join('')}`;
 
   const bindT = (id, clave) => {
     const el = document.getElementById(id);
@@ -572,9 +569,229 @@ function tableroAdmin(m) {
     S.buscaAsig = ''; S.filtroPersona = ''; S.filtroCuando = ''; tableroAdmin(m);
   };
 
+  document.getElementById('organizarW').onclick = () => modalWidgets(m);
+
   m.querySelectorAll('[data-persona]').forEach(el => el.onclick = e => {
     if (e.target.closest('a')) return;
-    S.filtros.resp = el.dataset.persona; S.vista = 'procesos'; irA('procesos'); render();
+    S.filtroPersona = el.dataset.persona; tableroAdmin(m);
+  });
+
+  m.querySelectorAll('[data-vista]').forEach(b => b.onclick = async () => {
+    try {
+      await api('/procesos/' + b.dataset.vista + '/nota-vista', { method: 'POST' });
+      const p = S.procesos.find(x => x.id === b.dataset.vista);
+      if (p) p.notaVista = p.notasClinica;
+      tableroAdmin(m);
+    } catch (_) { toast('No se pudo marcar'); }
+  });
+}
+
+/* ── Widgets ──────────────────────────────────────────────────── */
+
+/** Cómo va el día: de lo agendado para hoy, cuánto ya se envió. */
+function wProgresoDia(ps) {
+  const delDia = ps.filter(p => grupoDe(p, 'fecha') === 'hoy' ||
+    (p.estado === 'en_revision' && (p.enviadoEn || '').slice(0, 10) === hoyISO()));
+  const agendados = ps.filter(p => grupoDe(p, 'fecha') === 'hoy').length;
+  const enviadosHoy = ps.filter(p => (p.enviadoEn || '').slice(0, 10) === hoyISO()).length;
+  const avanceDia = delDia.length
+    ? Math.round(delDia.reduce((t, p) => t + avance(p), 0) / delDia.length) : 0;
+  const pc = agendados ? Math.round(enviadosHoy / (agendados + enviadosHoy) * 100) : 0;
+
+  return `<div class="card widget progreso-dia">
+    <div class="flex" style="align-items:baseline;gap:12px;flex-wrap:wrap">
+      <h3 style="margin:0">Hoy, ${esc(fechaDia(hoyISO()))}</h3>
+      <span class="tiny">${agendados} por levantar · ${enviadosHoy} ya enviados · ${avanceDia}% de avance promedio en los de hoy</span>
+    </div>
+    <div class="bar grande" style="margin-top:14px"><i style="width:${pc}%"></i></div>
+    <div class="tiny" style="margin-top:7px">
+      ${agendados === 0 && enviadosHoy === 0
+        ? 'No hay nada agendado para hoy.'
+        : pc === 100 ? '¡Listo! Todo lo de hoy ya se envió.'
+        : `${pc}% de lo de hoy ya está enviado.`}
+    </div>
+  </div>`;
+}
+
+function hoyISO() { return new Date().toISOString().slice(0, 10); }
+
+function wDia(ps, cajon, titulo, vacio) {
+  const lista = ps.filter(p => grupoDe(p, 'fecha') === cajon)
+    .sort((a, b) => (a.hora || '99:99').localeCompare(b.hora || '99:99'));
+
+  return `<div class="card widget panel-urg ${lista.length ? (cajon === 'hoy' ? 'activo' : 'manana') : ''}">
+    <h3>${titulo} <span class="cuenta-urg">${lista.length}</span></h3>
+    ${lista.length ? `<div class="urg-lista">${lista.map(p => `
+      <a class="urg-item con-hora" href="#/proceso/${p.id}">
+        <span class="urg-hora">${p.hora ? esc(p.hora) : '<i>sin hora</i>'}</span>
+        <span class="urg-nom">${esc(p.nombre)}</span>
+        <span class="urg-meta">
+          ${esc(p.area || 'Sin área')} ·
+          <span class="tag-persona" style="--tp:${colorPersona(p.responsable)}">${esc(nombrePersona(p.responsable))}</span>
+          ${p.atiende ? `· atiende <b>${esc(p.atiende)}</b>` : '· <span class="falta-asig">falta la contraparte</span>'}
+        </span>
+        <span class="urg-der"><span class="tiny">${avance(p)}%</span></span>
+      </a>`).join('')}</div>` : `<div class="mut">${vacio}</div>`}
+  </div>`;
+}
+
+/** Lo que la clínica escribió y todavía no has leído. */
+function wAvisos(ps) {
+  const nuevos = ps.filter(p => (p.notasClinica || '').trim() &&
+    p.notasClinica !== p.notaVista);
+  if (!nuevos.length) return '';
+
+  return `<div class="card widget avisos">
+    <h3>Avisos de la clínica <span class="cuenta-urg">${nuevos.length}</span></h3>
+    <p class="tiny">Notas que escribieron para quien va a entrevistar. Marca la casilla cuando la hayas leído.</p>
+    <div class="avisos-lista">${nuevos.map(p => `
+      <div class="aviso-item">
+        <button class="check" data-vista="${p.id}" title="Marcar como leído">✓</button>
+        <div>
+          <a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
+          <div class="tiny">${esc(p.area || '')}${p.atiende ? ' · ' + esc(p.atiende) : ''}</div>
+          <div class="aviso-texto">${esc(aTextoPlano(p.notasClinica))}</div>
+        </div>
+      </div>`).join('')}</div>
+  </div>`;
+}
+
+function wVencidos(ps) {
+  const lista = ps.filter(p => grupoDe(p, 'fecha') === 'vencidos').sort(porCercania);
+  return `<div class="card widget panel-urg ${lista.length ? 'vencido' : ''}">
+    <h3>Pasados de fecha <span class="cuenta-urg">${lista.length}</span></h3>
+    ${lista.length ? `<div class="urg-lista">${lista.slice(0, 8).map(p => `
+      <a class="urg-item" href="#/proceso/${p.id}">
+        <span class="urg-nom">${esc(p.nombre)}</span>
+        <span class="urg-meta">${esc(p.area || '')} ·
+          <span class="tag-persona" style="--tp:${colorPersona(p.responsable)}">${esc(nombrePersona(p.responsable))}</span></span>
+        <span class="urg-der">${textoPlazo(p.fechaLimite).html}<span class="tiny">${avance(p)}%</span></span>
+      </a>`).join('')}
+      ${lista.length > 8 ? `<div class="tiny" style="padding:8px 2px">y ${lista.length - 8} más</div>` : ''}
+      </div>` : '<div class="mut">Nada atrasado. Todo al día.</div>'}
+  </div>`;
+}
+
+function wTotales(todos, filtrados) {
+  const av = filtrados.length
+    ? Math.round(filtrados.reduce((t, p) => t + avance(p), 0) / filtrados.length) : 0;
+  const fotos = filtrados.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'foto').length, 0);
+  const enviados = filtrados.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
+  const filtrando = filtrados.length !== todos.length;
+
+  return `<div class="grid g4 widget" style="margin-bottom:18px">
+    <div class="kpi"><div class="n">${filtrados.length}${filtrando ? `<span class="tiny"> de ${todos.length}</span>` : ''}</div>
+      <div class="t">Procesos${filtrando ? ' (filtrados)' : ''}</div></div>
+    <div class="kpi"><div class="n">${av}%</div><div class="t">Avance del proyecto</div>
+      <div class="bar" style="margin-top:8px"><i style="width:${av}%"></i></div></div>
+    <div class="kpi"><div class="n">${enviados}</div><div class="t">Enviados</div></div>
+    <div class="kpi"><div class="n">${fotos}</div><div class="t">Fotos recogidas</div></div>
+  </div>`;
+}
+
+function wPersonas(ps) {
+  const gente = columnasPersonas().filter(c => c.id);
+  if (!gente.length) return '';
+  return `<div class="card widget" style="margin-bottom:18px"><h3>Cada persona</h3>
+    <div class="grid g2">
+      ${gente.map(pe => {
+        const sub = ps.filter(p => p.responsable === pe.id);
+        const x = sub.length ? Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length) : 0;
+        const env = sub.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
+        const tarde = sub.filter(p => grupoDe(p, 'fecha') === 'vencidos').length;
+        const persona = S.equipo.find(u => u.id === pe.id);
+        return `<div class="persona-card" data-persona="${pe.id}" style="--tp:${colorPersona(pe.id)}">
+          <div class="flex" style="margin-bottom:8px">
+            <div class="avatar">${esc((pe.nombre || '?').trim()[0].toUpperCase())}
+              ${persona ? puntoPresencia(persona) : ''}</div>
+            <div style="flex:1"><b>${esc(pe.nombre)}</b>
+              <div class="tiny">${sub.length} asignado(s) · ${env} enviado(s)${
+                tarde ? ` · <span class="plazo vencido">${tarde} en mora</span>` : ''}</div>
+              <div class="tiny">${esc(presencia(persona || {}).texto)}</div></div>
+            <div style="text-align:right"><b style="font-size:19px">${x}%</b></div>
+          </div>
+          <div class="bar"><i style="width:${x}%"></i></div>
+          ${sub.length ? `<div class="mini-lista">${[...sub].sort(porCercania).slice(0, 5).map(p =>
+            `<a class="mini-item" href="#/proceso/${p.id}">
+               <span class="mini-fecha">${p.fechaLimite ? esc(fechaDia(p.fechaLimite).replace(/^\w+ /, '')) : '—'}</span>
+               <span class="mini-nom">${esc(recortar(p.nombre, 28))}</span></a>`).join('')}${
+            sub.length > 5 ? `<div class="tiny" style="padding-top:4px">y ${sub.length - 5} más</div>` : ''}</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div></div>`;
+}
+
+function wEstados(ps) {
+  return `<div class="card widget" style="margin-bottom:18px"><h3>Por estado</h3>
+    ${ESTADOS.map(e => {
+      const n = ps.filter(p => (p.estado || 'pendiente') === e.k).length;
+      const pc = ps.length ? Math.round(n / ps.length * 100) : 0;
+      return `<div style="margin-bottom:11px"><div class="flex" style="font-size:15px;margin-bottom:4px">
+        <span>${esc(e.n)}</span><span class="right mut">${n}</span></div>
+        <div class="bar"><i style="width:${pc}%"></i></div></div>`;
+    }).join('')}</div>`;
+}
+
+function wAreas(ps) {
+  const areas = (S.config.areas || []).filter(a => ps.some(p => p.area === a));
+  return `<div class="card widget" style="margin-bottom:18px"><h3>Por área</h3>
+    ${areas.map(a => {
+      const sub = ps.filter(p => p.area === a);
+      const x = Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length);
+      return `<div style="margin-bottom:10px"><div class="flex" style="font-size:15px;margin-bottom:4px">
+        <span>${esc(a)}</span><span class="right mut">${sub.length} · ${x}%</span></div>
+        <div class="bar"><i style="width:${x}%"></i></div></div>`;
+    }).join('') || '<div class="mut">Aún no hay procesos por área.</div>'}</div>`;
+}
+
+/** Qué bloques ver y en qué orden. */
+function modalWidgets(m) {
+  const prefs = prefsWidgets();
+  const ordenados = prefs.orden
+    .map(k => WIDGETS.find(w => w.k === k))
+    .filter(Boolean)
+    .concat(WIDGETS.filter(w => !prefs.orden.includes(w.k)));
+
+  modal(`<h3>Organizar el tablero</h3>
+    <p class="mut" style="margin-top:-6px">Arma tu tablero: sube los bloques que más miras
+      y esconde los que no. Queda guardado en este computador.</p>
+    <div>${ordenados.map((w, i) => `
+      <div class="col-orden">
+        <label class="flex" style="flex:1;gap:10px;cursor:pointer">
+          <input type="checkbox" data-wver="${w.k}" ${prefs.ocultos.includes(w.k) ? '' : 'checked'}
+            style="width:22px;height:22px">
+          <b>${esc(w.n)}</b>
+        </label>
+        <button class="btn sm ic" data-wsube="${w.k}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn sm ic" data-wbaja="${w.k}" ${i === ordenados.length - 1 ? 'disabled' : ''}>↓</button>
+      </div>`).join('')}</div>
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" id="wReset">Volver al orden original</button>
+      <button class="btn p right" data-cerrar>Listo</button>
+    </div>`, box => {
+    const refrescar = () => { guardarWidgets(); tableroAdmin(m); cerrarModal(); modalWidgets(m); };
+
+    box.querySelectorAll('[data-wver]').forEach(cb => cb.onchange = () => {
+      const k = cb.dataset.wver;
+      prefs.ocultos = cb.checked ? prefs.ocultos.filter(x => x !== k) : prefs.ocultos.concat([k]);
+      refrescar();
+    });
+
+    const mover = (k, d) => {
+      const ids = ordenados.map(w => w.k);
+      const i = ids.indexOf(k), j = i + d;
+      if (j < 0 || j >= ids.length) return;
+      ids.splice(j, 0, ids.splice(i, 1)[0]);
+      prefs.orden = ids;
+      refrescar();
+    };
+    box.querySelectorAll('[data-wsube]').forEach(b => b.onclick = () => mover(b.dataset.wsube, -1));
+    box.querySelectorAll('[data-wbaja]').forEach(b => b.onclick = () => mover(b.dataset.wbaja, 1));
+
+    box.querySelector('#wReset').onclick = () => {
+      prefs.orden = WIDGETS.map(w => w.k); prefs.ocultos = [];
+      refrescar();
+    };
   });
 }
 
@@ -605,6 +822,8 @@ function vistaProcesos(m) {
     </div>
   </div>
 
+  ${bandejasProcesos(ps)}
+
   ${grupos.map(g => {
     const suyos = ps.filter(p => (p.estado || 'pendiente') === g.k);
     return `<section class="grupo">
@@ -631,6 +850,39 @@ function vistaProcesos(m) {
   m.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => abrirProceso(tr.dataset.id));
 }
 
+/** Dos bandejas que responden preguntas concretas: qué está en el aire
+    sin dueño, y a qué le falta que la clínica confirme la cita. */
+function bandejasProcesos(ps) {
+  const huerfanos = ps.filter(p => !p.responsable && p.estado !== 'aprobado');
+  const sinCita = ps.filter(p => p.responsable && p.estado !== 'aprobado'
+    && p.estado !== 'en_revision' && (!p.fechaCita || !p.atiende));
+
+  if (!huerfanos.length && !sinCita.length) return '';
+
+  const mini = (p, falta) => `<a class="bandeja-item" href="#/proceso/${p.id}">
+    <b>${esc(p.nombre)}</b>
+    <span class="tiny">${esc(p.area || 'Sin área')}${
+      p.responsable ? ' · ' + esc(nombrePersona(p.responsable)) : ''}</span>
+    ${falta ? `<span class="falta-asig">${falta(p)}</span>` : ''}
+  </a>`;
+
+  return `<div class="grid g2" style="margin-bottom:20px">
+    ${huerfanos.length ? `<div class="card bandeja">
+      <h3>En borrador y sin asignar <span class="cuenta-urg">${huerfanos.length}</span></h3>
+      <p class="tiny">Nadie los ha tomado. ${esAdmin() ? 'Repártelos desde Asignación.' : ''}</p>
+      <div class="bandeja-lista">${huerfanos.map(p => mini(p)).join('')}</div>
+    </div>` : ''}
+
+    ${sinCita.length ? `<div class="card bandeja">
+      <h3>Falta confirmar la cita <span class="cuenta-urg">${sinCita.length}</span></h3>
+      <p class="tiny">Tienen responsable, pero la clínica todavía no dijo quién atiende o qué día.</p>
+      <div class="bandeja-lista">${sinCita.map(p => mini(p, x =>
+        !x.atiende && !x.fechaCita ? 'sin contraparte ni día'
+        : !x.atiende ? 'sin contraparte' : 'sin día')).join('')}</div>
+    </div>` : ''}
+  </div>`;
+}
+
 function etiquetaEstado(k) {
   return (ESTADOS.find(e => e.k === k) || { n: k }).n;
 }
@@ -647,7 +899,7 @@ function filaProceso(p) {
     ${esAdmin() ? `<td class="mut" style="width:130px">${esc(nombrePersona(p.responsable))}</td>` : ''}
     <td style="width:120px">${plazo.html}</td>
     <td style="width:120px"><div class="bar"><i style="width:${av}%"></i></div><span class="tiny">${av}%</span></td>
-    <td class="tiny" style="width:78px">📷 ${ev.filter(e => e.tipo === 'foto').length} · 🎙 ${ev.filter(e => e.tipo === 'audio').length}</td>
+    <td class="tiny" style="width:60px">${ev.filter(e => e.tipo === 'foto').length ? '📷 ' + ev.filter(e => e.tipo === 'foto').length : ''}</td>
     <td style="width:46px">${p.informeUrl
       ? `<a class="btn sm ic" href="${esc(p.informeUrl)}" target="_blank" rel="noopener"
            title="Abrir el informe" onclick="event.stopPropagation()">📄</a>` : ''}</td>
@@ -2180,12 +2432,13 @@ function modalCompartir(p, d) {
 /* Los grupos en que se parte el trabajo de cada persona. El orden importa:
    arriba lo que aprieta, abajo lo que puede esperar. */
 const GRUPOS_FECHA = [
-  { k: 'vencidos',  n: 'Vencidos',         abierto: true,  urgente: true },
-  { k: 'hoy',       n: 'Hoy',              abierto: true,  urgente: true },
-  { k: 'semana',    n: 'Esta semana',      abierto: true },
-  { k: 'siguiente', n: 'Semana siguiente', abierto: false },
-  { k: 'despues',   n: 'Más adelante',     abierto: false },
-  { k: 'sinfecha',  n: 'Sin fecha',        abierto: false }
+  { k: 'vencidos',   n: 'Vencidos',         abierto: true,  urgente: true },
+  { k: 'hoy',        n: 'Hoy',              abierto: true,  urgente: true },
+  { k: 'semana',     n: 'Esta semana',      abierto: true },
+  { k: 'siguiente',  n: 'Semana siguiente', abierto: false },
+  { k: 'despues',    n: 'Más adelante',     abierto: false },
+  { k: 'sinfecha',   n: 'Sin fecha',        abierto: false },
+  { k: 'entregados', n: 'Ya entregados',    abierto: false }
 ];
 
 const GRUPOS_ESTADO = [
@@ -2403,6 +2656,10 @@ function columnaPersona(col, grupos, indice) {
 function grupoDe(p, criterio) {
   if (criterio === 'estado') return p.estado || 'pendiente';
 
+  // Lo que ya se envió salió de las manos de quien lo levanta: aunque la
+  // fecha haya pasado, no es una deuda suya sino algo esperando revisión.
+  if (p.estado === 'en_revision' || p.estado === 'aprobado') return 'entregados';
+
   const f = (p.fechaLimite || '').slice(0, 10);
   if (!f) return 'sinfecha';
 
@@ -2413,7 +2670,7 @@ function grupoDe(p, criterio) {
   const finSig = new Date(lunes); finSig.setDate(lunes.getDate() + 13);
   const iso = d => d.toISOString().slice(0, 10);
 
-  if (f < iso(hoy)) return p.estado === 'aprobado' ? 'despues' : 'vencidos';
+  if (f < iso(hoy)) return 'vencidos';
   if (f === iso(hoy)) return 'hoy';
   if (f <= iso(finSemana)) return 'semana';
   if (f <= iso(finSig)) return 'siguiente';
@@ -3893,7 +4150,17 @@ function vistaRevision(m) {
       <button class="tab ${S.filtroRev === 'devueltos' ? 'on' : ''}" data-rev="devueltos">
         Devueltos <span class="tiny">${devueltos.length}</span></button>
     </div>
+    <button class="btn sm" id="verLotes">📚 Análisis en conjunto</button>
     <a class="btn sm" href="#/mapa">⤳ Ver el mapa</a>
+  </div>
+
+  <div class="card barra-lote">
+    <label class="flex" style="gap:10px;cursor:pointer">
+      <input type="checkbox" id="selTodos" style="width:22px;height:22px">
+      <b>Seleccionar para analizar en conjunto</b>
+    </label>
+    <span class="tiny" id="cuentaSel">ninguno seleccionado</span>
+    <button class="btn p" id="analizarLote" disabled>✨ Analizar los seleccionados</button>
   </div>
 
   ${S.filtroRev === 'esperando' && !enviados.length
@@ -3909,6 +4176,34 @@ function vistaRevision(m) {
   m.querySelectorAll('[data-rev]').forEach(b => b.onclick = () => {
     S.filtroRev = b.dataset.rev; vistaRevision(m);
   });
+
+  S.selLote = S.selLote || [];
+  const refrescarSel = () => {
+    const n = S.selLote.length;
+    const eco = document.getElementById('cuentaSel');
+    const btn = document.getElementById('analizarLote');
+    if (eco) eco.textContent = n === 0 ? 'ninguno seleccionado'
+      : n === 1 ? '1 seleccionado — elige al menos 2' : `${n} seleccionados`;
+    if (btn) btn.disabled = n < 2;
+  };
+
+  m.querySelectorAll('[data-sel]').forEach(cb => cb.onchange = () => {
+    const id = cb.dataset.sel;
+    S.selLote = cb.checked ? S.selLote.concat([id]) : S.selLote.filter(x => x !== id);
+    refrescarSel();
+  });
+
+  const st = document.getElementById('selTodos');
+  if (st) st.onchange = () => {
+    const visibles = [...m.querySelectorAll('[data-sel]')];
+    S.selLote = st.checked ? visibles.map(cb => cb.dataset.sel) : [];
+    visibles.forEach(cb => { cb.checked = st.checked; });
+    refrescarSel();
+  };
+
+  document.getElementById('analizarLote').onclick = () => modalLote(S.selLote);
+  document.getElementById('verLotes').onclick = () => modalLote(null);
+  refrescarSel();
 
   m.querySelectorAll('[data-abrirproc]').forEach(b => b.onclick = () => abrirProceso(b.dataset.abrirproc));
   m.querySelectorAll('[data-ia]').forEach(b => b.onclick = () => {
@@ -3938,7 +4233,7 @@ function tarjetaRevision(p) {
     <div class="rev-datos">
       <div><b>${av}%</b><span class="tiny">completo</span></div>
       <div><b>${ev.filter(e => e.tipo === 'foto').length}</b><span class="tiny">fotos</span></div>
-      <div><b>${ev.filter(e => e.tipo === 'audio').length}</b><span class="tiny">audios</span></div>
+
       <div><b>${p.enviosTotal || 0}</b><span class="tiny">envío(s)</span></div>
       <div><b>${p.enviadoEn ? esc(fechaLarga(p.enviadoEn)) : '—'}</b><span class="tiny">enviado</span></div>
     </div>
@@ -4046,6 +4341,181 @@ function modalColumnas(m) {
     box.querySelector('#colReset').onclick = () => {
       prefs.orden = []; prefs.ocultas = [];
       aplicar();
+    };
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Análisis en conjunto
+
+   Mirar los procesos de a uno sirve para entender cada trabajo. Mirarlos
+   juntos sirve para otra cosa: ver qué se repite, cómo se encadenan y qué
+   módulos de software salen de ahí. Es el insumo para construir Arthemis.
+   ═══════════════════════════════════════════════════════════════ */
+async function modalLote(ids) {
+  const nuevos = Array.isArray(ids) && ids.length >= 2;
+  const nombres = (ids || []).map(id => (S.procesos.find(p => p.id === id) || {}).nombre).filter(Boolean);
+  const fotos = (ids || []).reduce((a, id) => {
+    const p = S.procesos.find(x => x.id === id);
+    return a + ((p && p.evidencias) || []).filter(e => e.tipo === 'foto').length;
+  }, 0);
+
+  modal(`<h3>${nuevos ? 'Analizar en conjunto' : 'Análisis en conjunto'}</h3>
+    ${nuevos ? `
+      <p class="mut" style="margin-top:-6px">
+        Claude va a mirar estos ${nombres.length} procesos como una sola operación:
+        cómo se encadenan, qué datos y pasos se repiten, y qué módulos de sistema
+        saldrían de ahí. Leerá las fotos con atención para sacar los campos reales
+        de los formatos.</p>
+      <div class="chips-lote">${nombres.map(n => `<span class="chip">${esc(n)}</span>`).join('')}</div>
+      <div class="tiny" style="margin:10px 0">${fotos} foto(s) disponibles entre todos.</div>
+      <label class="f"><span class="lbl">¿Cómo llamar a este análisis?</span>
+        <input type="text" id="loteTitulo" value="${esc(nombres.length + ' procesos')}"></label>
+      <button class="btn p" id="loteIr" style="width:100%">✨ Analizar los ${nombres.length}</button>
+      <div id="loteEstado" style="margin-top:14px"></div>
+    ` : ''}
+    <div id="loteLista" style="margin-top:${nuevos ? '20px' : '0'}">
+      <div class="mut">Buscando análisis anteriores…</div></div>
+    <div class="flex" style="margin-top:16px"><button class="btn right" data-cerrar>Cerrar</button></div>`,
+  async box => {
+    const lista = box.querySelector('#loteLista');
+
+    const cargar = async () => {
+      try {
+        const d = await api('/analisis-lote');
+        lista.innerHTML = d.lotes.length
+          ? `<span class="lbl">Análisis guardados</span>
+             <div class="lotes">${d.lotes.map(x => `
+              <div class="lote-item">
+                <button class="lote-cab" data-abrirlote="${x.id}">
+                  <b>${esc(x.titulo)}</b>
+                  <span class="tiny">${esc(fechaLarga(x.creado))} · ${x.procesos.length} procesos</span>
+                </button>
+                <button class="btn sm ic danger" data-borrarlote="${x.id}">×</button>
+              </div>`).join('')}</div>`
+          : '<div class="mut">Todavía no hay ninguno.</div>';
+
+        lista.querySelectorAll('[data-abrirlote]').forEach(b => b.onclick = () => {
+          const x = d.lotes.find(y => y.id === b.dataset.abrirlote);
+          if (x) verLote(x);
+        });
+        lista.querySelectorAll('[data-borrarlote]').forEach(b => b.onclick = async () => {
+          await api('/analisis-lote/' + b.dataset.borrarlote, { method: 'DELETE' });
+          cargar();
+        });
+      } catch (_) { lista.innerHTML = '<div class="mut">No se pudo consultar.</div>'; }
+    };
+
+    const ir = box.querySelector('#loteIr');
+    if (ir) ir.onclick = async () => {
+      const estado = box.querySelector('#loteEstado');
+      ir.disabled = true;
+      ir.textContent = 'Analizando… esto tarda un par de minutos';
+      estado.innerHTML = `<div class="mut">Claude está leyendo los ${nombres.length} levantamientos
+        completos y ${Math.min(fotos, 16)} foto(s). Es bastante material, así que se demora más
+        que un análisis suelto. No cierres esta ventana.</div>`;
+      try {
+        const r = await api('/analisis-lote', { method: 'POST', body: {
+          procesos: ids, titulo: box.querySelector('#loteTitulo').value.trim()
+        }});
+        cerrarModal();
+        verLote({ titulo: box.querySelector('#loteTitulo').value.trim() || 'Análisis',
+                  contenido: r.analisis, procesos: r.procesos, creado: new Date().toISOString(),
+                  modelo: r.modelo });
+        toast('Análisis en conjunto listo');
+      } catch (e) {
+        estado.innerHTML = errorAnalisis(e);
+        const ver = estado.querySelector('#verCrudo');
+        if (ver) ver.onclick = () => {
+          const caja = estado.querySelector('#crudo');
+          caja.classList.toggle('oculto');
+          ver.textContent = caja.classList.contains('oculto') ? 'Ver lo que devolvió' : 'Ocultar';
+        };
+        ir.disabled = false;
+        ir.textContent = 'Intentar de nuevo';
+      }
+    };
+
+    await cargar();
+  });
+}
+
+function verLote(x) {
+  const c = x.contenido || {};
+  const l = v => Array.isArray(v) ? v : [];
+  const bloque = (t, html) => html ? `<section class="ia-bloque"><h4>${t}</h4>${html}</section>` : '';
+
+  modal(`<h3>${esc(x.titulo || 'Análisis en conjunto')}</h3>
+    <div class="ia-cab">
+      <span class="tiny">${esc(fechaLarga(x.creado))} · ${l(x.procesos).length} procesos${
+        x.modelo ? ' · ' + esc(x.modelo) : ''}</span>
+    </div>
+    <div class="chips-lote" style="margin-bottom:16px">${l(x.procesos).map(n =>
+      `<span class="chip">${esc(n)}</span>`).join('')}</div>
+
+    ${bloque('Panorama', c.panorama ? `<p>${esc(c.panorama)}</p>` : '')}
+
+    ${bloque('Cadenas de trabajo', l(c.cadenas).length
+      ? l(c.cadenas).map(cad => `<div class="cadena-lote">
+          <b>${esc(cad.nombre || '')}</b>
+          <div class="cadena-flujo">${l(cad.procesos).map(p =>
+            `<span class="paso-cadena">${esc(p)}</span>`).join('<span class="fl">→</span>')}</div>
+          ${cad.descripcion ? `<div class="tiny">${esc(cad.descripcion)}</div>` : ''}
+          ${l(cad.rupturas).length ? `<ul class="ia-lista" style="margin-top:8px">${
+            l(cad.rupturas).map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+        </div>`).join('') : '')}
+
+    ${bloque('Módulos que salen de aquí', l(c.modulos_sugeridos).length
+      ? l(c.modulos_sugeridos).map(mo => `<div class="modulo">
+          <div class="flex" style="gap:10px;flex-wrap:wrap">
+            <b style="font-size:17px;flex:1">${esc(mo.modulo || '')}</b>
+            <span class="et impacto-${esc(mo.prioridad || '')}">prioridad ${esc(mo.prioridad || '?')}</span>
+          </div>
+          ${mo.por_que ? `<div class="tiny" style="margin:5px 0 9px">${esc(mo.por_que)}</div>` : ''}
+          ${l(mo.cubre).length ? `<div class="chips-lote">${l(mo.cubre).map(p =>
+            `<span class="chip" style="font-size:13px">${esc(p)}</span>`).join('')}</div>` : ''}
+          ${l(mo.funciones).length ? `<div style="margin-top:10px"><span class="lbl">Tiene que saber hacer</span>
+            <ul class="ia-lista">${l(mo.funciones).map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
+          ${l(mo.datos_clave).length ? `<div style="margin-top:8px"><span class="lbl">Datos que maneja</span>
+            <div class="chips-lote">${l(mo.datos_clave).map(d =>
+              `<span class="chip dato">${esc(d)}</span>`).join('')}</div></div>` : ''}
+        </div>`).join('') : '')}
+
+    ${bloque('Lo que se repite', l(c.duplicidades).length
+      ? `<ul class="ia-lista">${l(c.duplicidades).map(d => `<li>
+          <b>${esc(d.que_se_repite || '')}</b>
+          <div class="tiny">en: ${l(d.procesos).map(esc).join(' · ')}</div>
+          <div class="ia-obs">${esc(d.propuesta || '')}</div></li>`).join('')}</ul>` : '')}
+
+    ${bloque('Conexiones', l(c.conexiones).length
+      ? `<div class="cadenas">${l(c.conexiones).map(x2 => `
+          <div class="cadena"><div class="nodo">${esc(x2.de || '')}</div>
+            <span class="flecha">→</span>
+            <div class="nodo">${esc(x2.a || '')}</div>
+            <div style="flex:1 1 100%" class="tiny">${esc(x2.que_pasa || '')}
+              <span class="et conf-${esc(x2.confianza || '')}">${esc(x2.confianza || '')}</span>
+              ${x2.declarada === false ? '<span class="et">hipótesis</span>' : ''}</div>
+          </div>`).join('')}</div>` : '')}
+
+    ${bloque('Lo que se ve en las fotos', l(c.hallazgos_en_fotos).length
+      ? `<ul class="ia-lista">${l(c.hallazgos_en_fotos).map(h => `<li>
+          <b>Foto ${esc(h.foto || '?')}</b> ${h.proceso ? `<span class="tiny">(${esc(h.proceso)})</span>` : ''}
+          <div>${esc(h.observacion || '')}</div></li>`).join('')}</ul>` : '')}
+
+    ${bloque('Qué falta levantar', l(c.vacios).length
+      ? `<ul class="ia-lista">${l(c.vacios).map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '')}
+
+    ${c.siguiente_paso ? `<div class="aviso-ia ok"><b>Por dónde empezar:</b> ${esc(c.siguiente_paso)}</div>` : ''}
+
+    <div class="flex" style="margin-top:18px">
+      <button class="btn" id="copiarLote">Copiar todo</button>
+      <button class="btn right" data-cerrar>Cerrar</button>
+    </div>`, box => {
+    box.querySelector('#copiarLote').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(c, null, 2));
+        toast('Copiado al portapapeles');
+      } catch (_) { toast('No se pudo copiar'); }
     };
   });
 }
