@@ -102,7 +102,7 @@ function aplicarRuta() {
     if (S.procId === id && S.vista === 'proceso') return;
     const p = S.procesos.find(x => x.id === id);
     if (p) return abrirProceso(id, true);
-    S.vista = 'procesos'; return render();
+    S.vista = volverA(); return render();
   }
   if (S.vista === vista && !S.procId) return;
   S.vista = vista; S.procId = null; S.draft = null;
@@ -1007,8 +1007,16 @@ function modalNuevoProceso() {
 }
 
 /* ── Editor de proceso ────────────────────────────────────────── */
+/** Dónde estaba antes de abrir el proceso, para devolverlo ahí. */
+const NOMBRES_VISTA = {
+  tablero: 'Tablero', procesos: 'Procesos', asignacion: 'Asignación',
+  revision: 'Revisión', agenda: 'Agenda', avance: 'Hoy y mañana',
+  mapear: 'Por mapear', mapa: 'Mapa', equipo: 'Equipo'
+};
+
 function abrirProceso(id, desdeRuta) {
   const p = S.procesos.find(x => x.id === id); if (!p) return;
+  if (S.vista && S.vista !== 'proceso') S.origen = S.vista;
   if (!desdeRuta) irA('proceso', id);
   S.draft = JSON.parse(JSON.stringify(p));
   S.draft.respuestas = S.draft.respuestas || {};
@@ -1051,12 +1059,12 @@ async function revisarBorrador(id) {
 }
 
 function vistaProceso(m) {
-  const p = S.draft; if (!p) { S.vista = 'procesos'; return render(); }
+  const p = S.draft; if (!p) { S.vista = volverA(); return render(); }
   const av = avance(p), ro = !puedeEditar();
 
   m.innerHTML = `
   <div class="topbar">
-    <button class="btn sm" id="volver">← Procesos</button><div class="sp"></div>
+    <button class="btn sm" id="volver">← ${esc(NOMBRES_VISTA[volverA()] || 'Atrás')}</button><div class="sp"></div>
     <span class="tiny" id="estadoGuardado"></span>
     ${ro ? '' : '<button class="btn sm" id="btnGuardar" title="Guardar ahora (Ctrl+S)">Guardar</button>'}
     ${esAdmin() ? '<button class="btn sm" id="btnIA" title="Que Claude analice este levantamiento">✨ Análisis</button>' : ''}
@@ -1113,7 +1121,9 @@ function vistaProceso(m) {
       const ok = await guardarAhora(true);
       if (!ok && !confirm('No se pudo guardar en el servidor. Los cambios quedaron respaldados en este equipo. ¿Salir de todos modos?')) return;
     }
-    S.vista = 'procesos'; S.procId = null; S.draft = null; irA('procesos'); render();
+    const destino = volverA();
+    S.vista = destino; S.procId = null; S.draft = null;
+    irA(destino); render();
   };
 
   pintarEstadoGuardado(S.dirty ? 'escribiendo' : 'guardado');
@@ -1140,7 +1150,8 @@ function vistaProceso(m) {
     b => b.querySelector('#okDel').onclick = async () => {
       await api('/procesos/' + p.id, { method: 'DELETE' });
       S.procesos = S.procesos.filter(x => x.id !== p.id);
-      cerrarModal(); S.vista = 'procesos'; S.draft = null; render(); toast('Proceso archivado');
+      cerrarModal(); S.vista = volverA(); S.draft = null; irA(S.vista); render();
+      toast('Proceso archivado');
     });
 
   if (!ro) [['pNombre', 'nombre'], ['pCod', 'codigo'], ['pArea', 'area'],
@@ -1151,6 +1162,16 @@ function vistaProceso(m) {
   });
 
   pintarSecciones();
+}
+
+/** A dónde lleva el botón de atrás: a donde estaba, o al tablero si se
+    entró directo por un enlace. */
+function volverA() {
+  const permitidas = esClinica()
+    ? ['avance', 'agenda', 'mapear', 'procesos', 'mapa']
+    : ['tablero', 'procesos', 'asignacion', 'revision', 'equipo', 'mapa'];
+  if (S.origen && permitidas.includes(S.origen)) return S.origen;
+  return esClinica() ? 'avance' : 'tablero';
 }
 
 function refrescarAvance() {
