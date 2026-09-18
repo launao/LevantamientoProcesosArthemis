@@ -426,6 +426,42 @@ SECCIONES_RENOMBRADAS = {
 }
 
 
+def _fusionar_campos():
+    """Unifica los pares que en la práctica eran lo mismo.
+
+    Se habían separado "fecha de entrega" de "día de la entrevista", y
+    "con quién hablar" de "quién atiende". En el uso real resultaron ser
+    un solo dato cada uno, y tener dos campos solo generaba huecos: el
+    tablero miraba uno mientras la gente llenaba el otro.
+
+    Corre una sola vez y no pisa nada: solo rellena lo que está vacío.
+    """
+    fila = D.row("SELECT data FROM config WHERE id=1")
+    if not fila:
+        return
+    cfg = D.jload(fila["data"], {})
+    if cfg.get("_fusion"):
+        return
+
+    try:
+        n1 = D.execute(
+            "UPDATE procesos SET fecha_limite = fecha_cita "
+            "WHERE (fecha_limite IS NULL OR fecha_limite = '') "
+            "AND fecha_cita IS NOT NULL AND fecha_cita <> ''")
+        n2 = D.execute(
+            "UPDATE procesos SET atiende = contacto "
+            "WHERE (atiende IS NULL OR atiende = '') "
+            "AND contacto IS NOT NULL AND contacto <> ''")
+        if n1 or n2:
+            print(f"[schema] campos fusionados: {n1} fecha(s), {n2} contacto(s)")
+    except Exception as e:
+        print("[schema] no se pudo fusionar:", e)
+        return
+
+    cfg["_fusion"] = True
+    D.execute("UPDATE config SET data=? WHERE id=1", (D.jdump(cfg),))
+
+
 def init_db():
     with D.conn_ctx() as con:
         cur = con.cursor()
@@ -523,6 +559,8 @@ def init_db():
         if tocada:
             D.execute("UPDATE plantilla SET data=?, version=? WHERE id=1",
                       (D.jdump(tpl), (fila["version"] or 1) + 1))
+
+    _fusionar_campos()
 
     if not D.row("SELECT id FROM usuarios LIMIT 1"):
         usuario = os.environ.get("ADMIN_USER", "admin")

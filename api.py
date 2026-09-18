@@ -182,10 +182,8 @@ def _procesos(solo_de=None):
             "estado": p["estado"], "prioridad": p["prioridad"], "notas": p["notas"],
             "respuestas": D.jload(p["respuestas"], {}),
             "fechaLimite": str(p.get("fecha_limite") or ""),
-            "contacto": p.get("contacto") or "",
             "atiende": p.get("atiende") or "",
             "hora": p.get("hora") or "",
-            "fechaCita": str(p.get("fecha_cita") or ""),
             "notasClinica": p.get("notas_clinica") or "",
             "notaVista": p.get("nota_vista") or "",
             "notaRevision": p.get("nota_revision") or "",
@@ -395,7 +393,7 @@ def crear_proceso():
          D.jdump(limpiar_respuestas(d.get("respuestas") or {})),
          u["id"], u["id"],
          (d.get("fechaLimite") or None) if u["rol"] == "admin" else None,
-         (d.get("contacto") or "").strip()))
+         (d.get("contacto") or d.get("atiende") or "").strip()))
 
     if u["rol"] == "clinica":
         D.execute("UPDATE procesos SET propuesto_por=?, notas_clinica=? WHERE id=?",
@@ -409,10 +407,13 @@ def crear_proceso():
 def designar_atiende(pid):
     """La contraparte de la clínica anota quién va a atender de su lado."""
     u = usuario_actual()
-    if u["rol"] not in ("admin", "clinica"):
-        return jsonify({"error": "sin_permiso"}), 403
-    if not D.row("SELECT id FROM procesos WHERE id=?", (pid,)):
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
         return jsonify({"error": "no_existe"}), 404
+    # La coordinación y la clínica siempre; quien levanta, sobre lo suyo:
+    # muchas veces el nombre de la contraparte lo averigua él mismo.
+    if u["rol"] not in ("admin", "clinica") and not _mio(p, u):
+        return jsonify({"error": "sin_permiso"}), 403
 
     d = request.get_json(silent=True) or {}
     campos, params = [], []
@@ -425,13 +426,6 @@ def designar_atiende(pid):
         hora = (d.get("hora") or "").strip()[:5]
         campos.append("hora=?")
         params.append(hora if re.match(r"^\d{2}:\d{2}$", hora) else None)
-    # La fecha de la cita es distinta de la fecha de entrega: la entrega la
-    # fija la coordinación, la cita la acuerda la clínica según cuándo
-    # puede atender su gente.
-    if "fechaCita" in d:
-        fecha = (d.get("fechaCita") or "").strip()[:10]
-        campos.append("fecha_cita=?")
-        params.append(fecha if re.match(r"^\d{4}-\d{2}-\d{2}$", fecha) else None)
     if not campos:
         return jsonify({"ok": True})
 
@@ -447,10 +441,13 @@ def nota_clinica(pid):
     """El cuadro de “tener en cuenta”: lo escribe la clínica, lo lee quien
     levanta. Es el canal para advertir cosas antes de la entrevista."""
     u = usuario_actual()
-    if u["rol"] not in ("admin", "clinica"):
-        return jsonify({"error": "sin_permiso"}), 403
-    if not D.row("SELECT id FROM procesos WHERE id=?", (pid,)):
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
         return jsonify({"error": "no_existe"}), 404
+    # La coordinación y la clínica siempre; quien levanta, sobre lo suyo:
+    # muchas veces el nombre de la contraparte lo averigua él mismo.
+    if u["rol"] not in ("admin", "clinica") and not _mio(p, u):
+        return jsonify({"error": "sin_permiso"}), 403
 
     d = request.get_json(silent=True) or {}
     texto = limpiar_html((d.get("notasClinica") or "").strip()[:8000])

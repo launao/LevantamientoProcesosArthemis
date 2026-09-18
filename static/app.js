@@ -233,7 +233,7 @@ async function guardarAhora(automatico) {
     await api('/procesos/' + p.id, { method: 'PUT', body: {
       nombre: p.nombre, codigo: p.codigo, area: p.area,
       responsable: p.responsable || null, estado: p.estado,
-      fechaLimite: p.fechaLimite || null, contacto: p.contacto || '',
+      fechaLimite: p.fechaLimite || null,
       notas: p.notas || '', respuestas: p.respuestas
     }});
     const i = S.procesos.findIndex(x => x.id === p.id);
@@ -401,18 +401,10 @@ function vistaTablero(m) {
 /** Un color estable por persona, para reconocerla sin leer el nombre. */
 /** Quién va a atender. Si nadie lo ha confirmado, se usa la referencia
     que quedó anotada, marcada como tentativa: es mejor que un hueco. */
-function contraparte(p) {
-  if (p.atiende) return { nombre: p.atiende, confirmada: true };
-  if (p.contacto) return { nombre: p.contacto, confirmada: false };
-  return null;
-}
-
 function contraparteHTML(p) {
-  const c = contraparte(p);
-  if (!c) return '· <span class="falta-asig">falta la contraparte</span>';
-  return c.confirmada
-    ? `· atiende <b>${esc(c.nombre)}</b>`
-    : `· <span class="por-confirmar" title="Es la referencia anotada; nadie la ha confirmado">${esc(c.nombre)} (por confirmar)</span>`;
+  return p.atiende
+    ? `· con <b>${esc(p.atiende)}</b>`
+    : '· <span class="falta-asig">falta con quién hablar</span>';
 }
 
 function colorPersona(id) {
@@ -666,7 +658,7 @@ function wChoques() {
       <div class="choque-par">
         <div class="cp-cuando">
           <b>${esc(a.hora || '')}</b>
-          <span class="tiny">${esc(fechaDia(a.fechaCita))}</span>
+          <span class="tiny">${esc(fechaDia(a.fechaLimite))}</span>
         </div>
         <div class="cp-quien">
           <span class="tag-persona" style="--tp:${colorPersona(a.responsable)}">${esc(nombrePersona(a.responsable))}</span>
@@ -939,7 +931,7 @@ function filaProceso(p) {
     <td class="mut" style="width:74px">${esc(p.codigo || '—')}</td>
     <td><a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
       ${p.propuestoPor && !p.responsable ? '<span class="etiqueta-prop">propuesto por la clínica</span>' : ''}
-      <div class="tiny">${esc(p.area || 'Sin área')}${p.contacto ? ' · contacto: ' + esc(p.contacto) : ''}</div>
+      <div class="tiny">${esc(p.area || 'Sin área')}${p.atiende ? ' · con ' + esc(p.atiende) : ''}</div>
       ${p.notasClinica ? `<div class="tiny nota-mini">⚑ ${esc(recortar(aTextoPlano(p.notasClinica), 90))}</div>` : ''}</td>
     ${esAdmin() ? `<td class="mut" style="width:130px">${esc(nombrePersona(p.responsable))}</td>` : ''}
     <td style="width:120px">${plazo.html}</td>
@@ -1002,9 +994,9 @@ function modalNuevoProceso() {
       <label class="f"><span class="lbl">Área</span><select id="mArea">${(S.config.areas || []).map(a => `<option>${esc(a)}</option>`).join('')}</select></label>
     </div>
     <div class="grid g2">
-      <label class="f"><span class="lbl">¿Con quién hablar en la clínica?</span>
+      <label class="f"><span class="lbl">¿Con quién se habla en la clínica?</span>
         <input type="text" id="mContacto" placeholder="Nombre y cargo"></label>
-      ${esAdmin() ? '<label class="f"><span class="lbl">Fecha de entrega</span><input type="date" id="mFecha"></label>' : ''}
+      ${esAdmin() ? '<label class="f"><span class="lbl">Día de la entrevista</span><input type="date" id="mFecha"></label>' : ''}
     </div>
     ${esAdmin()
       ? `<label class="f"><span class="lbl">Responsable del levantamiento</span>
@@ -1021,6 +1013,7 @@ function modalNuevoProceso() {
           area: box.querySelector('#mArea').value,
           responsable: esAdmin() ? (box.querySelector('#mResp').value || null) : null,
           contacto: box.querySelector('#mContacto').value.trim(),
+          atiende: box.querySelector('#mContacto').value.trim(),
           fechaLimite: esAdmin() && box.querySelector('#mFecha') ? (box.querySelector('#mFecha').value || null) : null
         }});
         cerrarModal();
@@ -1114,14 +1107,20 @@ function vistaProceso(m) {
     </div>
     <div class="grid g2" style="gap:10px;margin-top:10px">
       ${esAdmin()
-        ? `<label class="f" style="margin:0"><span class="lbl">Fecha de entrega</span>
+        ? `<label class="f" style="margin:0"><span class="lbl">Día de la entrevista</span>
             <input type="date" id="pFecha" value="${esc((p.fechaLimite || '').slice(0, 10))}"></label>`
-        : `<div class="f" style="margin:0"><span class="lbl">Fecha de entrega</span>
+        : `<div class="f" style="margin:0"><span class="lbl">Día de la entrevista</span>
             <div class="dato-fijo">${p.fechaLimite ? textoPlazo(p.fechaLimite).html + ` <span class="tiny">(${esc(p.fechaLimite.slice(0, 10))})</span>` : '<span class="tiny">Todavía sin fecha</span>'}
               <div class="tiny" style="margin-top:3px">La define la coordinación del levantamiento.</div></div></div>`}
-      <label class="f" style="margin:0"><span class="lbl">¿Con quién hablar en la clínica?</span>
-        <input type="text" id="pContacto" value="${esc(p.contacto || '')}" placeholder="Nombre y cargo de quien conoce el proceso" ${ro ? 'disabled' : ''}></label>
+      <label class="f" style="margin:0"><span class="lbl">Hora</span>
+        <select id="pHora" ${ro ? 'disabled' : ''}>
+          <option value="">— Sin hora —</option>
+          ${HORAS.map(h => `<option value="${h}" ${p.hora === h ? 'selected' : ''}>${h}</option>`).join('')}
+        </select></label>
     </div>
+    <label class="f" style="margin:10px 0 0"><span class="lbl">¿Con quién se habla en la clínica?</span>
+      <input type="text" id="pAtiende" value="${esc(p.atiende || '')}"
+        placeholder="Nombre y cargo de quien conoce el proceso" ${ro ? 'disabled' : ''}></label>
     ${p.notaRevision && p.estado === 'en_curso' ? `<div class="cuadro-devuelto">
       <div class="cc-cab"><span class="cd-et">↩ Devuelto para completar</span>
         <span class="tiny">${p.revisadoEn ? esc(fechaLarga(p.revisadoEn)) : ''}</span></div>
@@ -1185,7 +1184,7 @@ function vistaProceso(m) {
 
   if (!ro) [['pNombre', 'nombre'], ['pCod', 'codigo'], ['pArea', 'area'],
             ['pResp', 'responsable'], ['pEstado', 'estado'],
-            ['pFecha', 'fechaLimite'], ['pContacto', 'contacto']].forEach(([id, campo]) => {
+            ['pFecha', 'fechaLimite']].forEach(([id, campo]) => {
     const el = document.getElementById(id);
     if (el && !el.disabled) el.oninput = el.onchange = () => { p[campo] = el.value; guardarDebounce(); };
   });
@@ -3040,7 +3039,7 @@ function vistaAgenda(m) {
 /** La fecha que manda para la clínica: la cita acordada; si no la han
     puesto, la fecha de entrega que fijó la coordinación. */
 function fechaAgenda(p) {
-  return (p.fechaCita || p.fechaLimite || '').slice(0, 10);
+  return (p.fechaLimite || '').slice(0, 10);
 }
 
 function cajonAgenda(p) {
@@ -3095,14 +3094,10 @@ function tarjetaAgenda(p) {
     ${listo ? `<div class="cita-resuelta">
       ${p.hora ? `<span class="hora">${esc(p.hora)}</span>` : '<span class="hora falta">sin hora</span>'}
       <span class="quien">${esc(p.atiende)}</span>
-      ${p.fechaCita ? `<span class="tiny">${esc(fechaDia(p.fechaCita))}</span>` : ''}
+      ${p.fechaLimite ? `<span class="tiny">${esc(fechaDia(p.fechaLimite))}</span>` : ''}
     </div>` : ''}
 
     <div class="agenda-campos">
-      <label class="campo-fecha">
-        <span class="lbl">Día de la cita</span>
-        <input type="date" data-fechacita="${p.id}" value="${esc((p.fechaCita || '').slice(0, 10))}">
-      </label>
       <label class="campo-hora">
         <span class="lbl">Hora</span>
         <select data-hora="${p.id}">
@@ -3117,8 +3112,7 @@ function tarjetaAgenda(p) {
       </label>
     </div>
     <div class="tiny" style="margin-top:7px">
-      Entrega pedida: ${p.fechaLimite ? esc(fechaDia(p.fechaLimite)) : 'sin fecha'}${
-      p.contacto ? ' · referencia: ' + esc(p.contacto) : ''}</div>
+      Día: ${p.fechaLimite ? esc(fechaDia(p.fechaLimite)) : 'todavía sin fecha'}</div>
 
     <details class="nota-plegable" ${conNota ? 'open' : ''}>
       <summary>${conNota ? '⚑ Tener en cuenta' : '+ Agregar nota para quien entrevista'}</summary>
@@ -3157,9 +3151,6 @@ function conectarAgenda(m) {
 
   m.querySelectorAll('[data-hora]').forEach(sel => sel.onchange = () =>
     guardar(sel.dataset.hora, { hora: sel.value }, { hora: sel.value }));
-
-  m.querySelectorAll('[data-fechacita]').forEach(inp => inp.onchange = () =>
-    guardar(inp.dataset.fechacita, { fechaCita: inp.value }, { fechaCita: inp.value }));
 
   const conRetraso = (el, fn) => {
     let t = null;
@@ -3200,7 +3191,7 @@ function vistaPorMapear(m) {
 
   const tabla = lista => `<div class="tw"><table class="t"><tbody>${lista.map(p => `<tr>
     <td><b>${esc(p.nombre)}</b>
-      <div class="tiny">${esc(p.area || 'Sin área')}${p.contacto ? ' · ' + esc(p.contacto) : ''}</div>
+      <div class="tiny">${esc(p.area || 'Sin área')}${p.atiende ? ' · ' + esc(p.atiende) : ''}</div>
       ${p.notasClinica ? `<div class="tiny nota-mini">⚑ ${esc(recortar(aTextoPlano(p.notasClinica), 110))}</div>` : ''}</td>
     <td style="width:170px" class="mut">${p.responsable ? esc(nombrePersona(p.responsable)) : '<i>Sin asignar aún</i>'}</td>
     <td style="width:130px">${textoPlazo(p.fechaLimite).html}</td>
@@ -3667,10 +3658,6 @@ function panelClinica(ps) {
     <div class="cf-quien">
       <input type="text" data-atiende="${p.id}" value="${esc(p.atiende || '')}"
         placeholder="¿Quién atiende?" list="sug-atiende">
-    </div>
-    <div class="cf-fecha">
-      <input type="date" data-fechacita="${p.id}" value="${esc((p.fechaCita || '').slice(0, 10))}"
-        title="Día de la cita">
     </div>
     <span class="tiny cf-eco" data-eco="${p.id}"></span>
   </div>`;
@@ -4599,108 +4586,80 @@ function verLote(x) {
    contraparte los pueden poner tanto la coordinación como la clínica.
    ═══════════════════════════════════════════════════════════════ */
 function bloqueCita(p) {
-  const puede = esAdmin() || esClinica();
-  const listo = !!(p.atiende && p.hora);
-
-  if (!puede) {
-    if (!p.atiende && !p.hora && !p.fechaCita) return '';
-    return `<div class="bloque-cita solo-ver">
-      <span class="bc-et">La cita</span>
-      <div class="cita-resuelta" style="margin:0">
-        ${p.hora ? `<span class="hora">${esc(p.hora)}</span>` : '<span class="hora falta">sin hora</span>'}
-        <span class="quien">${esc(p.atiende || 'sin contraparte')}</span>
-        ${p.fechaCita ? `<span class="tiny">${esc(fechaDia(p.fechaCita))}</span>` : ''}
-      </div>
-    </div>`;
-  }
-
-  return `<div class="bloque-cita ${listo ? 'listo' : ''}">
-    <div class="flex" style="margin-bottom:10px">
-      <span class="bc-et">La cita</span>
-      <span class="tiny" id="citaEco"></span>
-      ${p.contacto && !p.atiende
-        ? `<button class="btn sm right" id="usarContacto">Usar «${esc(recortar(p.contacto, 22))}»</button>` : ''}
-    </div>
-    <div class="grid g3" style="gap:10px">
-      <label class="f" style="margin:0"><span class="lbl">Día de la entrevista</span>
-        <input type="date" id="cFecha" value="${esc((p.fechaCita || '').slice(0, 10))}"></label>
-      <label class="f" style="margin:0"><span class="lbl">Hora</span>
-        <select id="cHora">
-          <option value="">— Sin hora —</option>
-          ${HORAS.map(h => `<option value="${h}" ${p.hora === h ? 'selected' : ''}>${h}</option>`).join('')}
-        </select></label>
-      <label class="f" style="margin:0"><span class="lbl">¿Quién atiende de la clínica?</span>
-        <input type="text" id="cAtiende" value="${esc(p.atiende || '')}"
-          placeholder="Nombre y cargo de quien responde"></label>
-    </div>
-    <div id="avisoChoque">${avisoChoque(p)}</div>
-    <div class="tiny" style="margin-top:7px">
-      Esto es lo que sale en el tablero del día. La <b>fecha de entrega</b> de arriba es
-      otra cosa: es cuándo se necesita el proceso terminado.
-    </div>
-  </div>`;
+  const choques = chocaCon(p);
+  if (!choques.length) return '';
+  return `<div id="avisoChoque">${avisoChoque(p)}</div>`;
 }
 
 function conectarCita(p) {
-  const fecha = document.getElementById('cFecha');
-  if (!fecha) return;
-  const hora = document.getElementById('cHora');
-  const atiende = document.getElementById('cAtiende');
-  const eco = document.getElementById('citaEco');
+  const hora = document.getElementById('pHora');
+  const atiende = document.getElementById('pAtiende');
+  if (!hora && !atiende) return;
+
+  const eco = document.getElementById('estadoGuardado');
 
   const guardar = cuerpo => {
-    if (eco) eco.textContent = 'Guardando…';
     api('/procesos/' + p.id + '/atiende', { method: 'PUT', body: cuerpo })
       .then(() => {
         Object.assign(p, cuerpo);
         const enLista = S.procesos.find(x => x.id === p.id);
         if (enLista) Object.assign(enLista, cuerpo);
-        if (eco) { eco.textContent = 'Guardado ✓'; setTimeout(() => { eco.textContent = ''; }, 1800); }
+        if (eco) { eco.textContent = 'Guardado'; eco.style.color = 'var(--ok)'; }
+        repintarChoque(p);
       })
-      .catch(() => { if (eco) eco.textContent = 'No se pudo guardar'; });
+      .catch(() => toast('No se pudo guardar'));
   };
 
-  const repintarChoque = () => {
-    const caja = document.getElementById('avisoChoque');
-    if (!caja) return;
-    caja.innerHTML = avisoChoque(p);
+  if (hora && !hora.disabled) hora.onchange = () => guardar({ hora: hora.value });
 
-    caja.querySelectorAll('[data-pasar]').forEach(b => b.onclick = async () => {
-      if (!esAdmin()) { toast('Solo la coordinación reasigna'); return; }
-      await asignar(p.id, b.dataset.pasar);
-      p.responsable = b.dataset.pasar;
-      const sel = document.getElementById('pResp');
-      if (sel) sel.value = b.dataset.pasar;
-      repintarChoque();
-    });
+  if (atiende && !atiende.disabled) {
+    let t = null;
+    atiende.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(() => guardar({ atiende: atiende.value }), 700);
+    };
+  }
 
-    caja.querySelectorAll('[data-mover]').forEach(b => b.onclick = () => {
-      hora.value = b.dataset.mover;
-      guardar({ hora: b.dataset.mover });
-      repintarChoque();
-      toast('Movido a las ' + b.dataset.mover);
-    });
-  };
+  repintarChoque(p);
+}
 
-  fecha.onchange = () => { guardar({ fechaCita: fecha.value }); setTimeout(repintarChoque, 50); };
-  hora.onchange = () => { guardar({ hora: hora.value }); setTimeout(repintarChoque, 50); };
+/** Vuelve a dibujar el aviso de choque y reconecta sus botones. */
+function repintarChoque(p) {
+  let caja = document.getElementById('avisoChoque');
+  const choques = chocaCon(p);
 
-  let t = null;
-  atiende.oninput = () => {
-    clearTimeout(t);
-    t = setTimeout(() => guardar({ atiende: atiende.value }), 700);
-  };
+  if (!caja) {
+    if (!choques.length) return;
+    const ancla = document.querySelector('#secciones');
+    if (!ancla) return;
+    caja = document.createElement('div');
+    caja.id = 'avisoChoque';
+    ancla.parentNode.insertBefore(caja, ancla);
+  }
+  caja.innerHTML = avisoChoque(p);
 
-  // Atajo: casi siempre quien atiende es la persona que ya se anotó como
-  // referencia. Se ofrece en un clic en vez de hacer que la reescriban.
-  repintarChoque();
+  caja.querySelectorAll('[data-pasar]').forEach(b => b.onclick = async () => {
+    if (!esAdmin()) { toast('Solo la coordinación reasigna'); return; }
+    await asignar(p.id, b.dataset.pasar);
+    p.responsable = b.dataset.pasar;
+    const sel = document.getElementById('pResp');
+    if (sel) sel.value = b.dataset.pasar;
+    repintarChoque(p);
+  });
 
-  const usar = document.getElementById('usarContacto');
-  if (usar) usar.onclick = () => {
-    atiende.value = p.contacto;
-    guardar({ atiende: p.contacto });
-    usar.remove();
-  };
+  caja.querySelectorAll('[data-mover]').forEach(b => b.onclick = () => {
+    const hora = document.getElementById('pHora');
+    if (hora) hora.value = b.dataset.mover;
+    api('/procesos/' + p.id + '/atiende', { method: 'PUT', body: { hora: b.dataset.mover } })
+      .then(() => {
+        p.hora = b.dataset.mover;
+        const enLista = S.procesos.find(x => x.id === p.id);
+        if (enLista) enLista.hora = b.dataset.mover;
+        repintarChoque(p);
+        toast('Movido a las ' + b.dataset.mover);
+      })
+      .catch(() => toast('No se pudo mover'));
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -4726,13 +4685,13 @@ function seCruzan(a, b) {
 
 /** Los procesos con los que choca este, del mismo levantador. */
 function chocaCon(p, lista) {
-  const dia = (p.fechaCita || '').slice(0, 10);
+  const dia = (p.fechaLimite || '').slice(0, 10);
   if (!dia || !p.hora || !p.responsable || p.estado === 'aprobado') return [];
   return (lista || S.procesos).filter(x =>
     x.id !== p.id &&
     x.responsable === p.responsable &&
     x.estado !== 'aprobado' &&
-    (x.fechaCita || '').slice(0, 10) === dia &&
+    (x.fechaLimite || '').slice(0, 10) === dia &&
     seCruzan(x.hora, p.hora));
 }
 
@@ -4749,21 +4708,21 @@ function choquesAgenda() {
     });
   });
   return salida.sort((x, y) =>
-    ((x.a.fechaCita || '') + (x.a.hora || '')).localeCompare((y.a.fechaCita || '') + (y.a.hora || '')));
+    ((x.a.fechaLimite || '') + (x.a.hora || '')).localeCompare((y.a.fechaLimite || '') + (y.a.hora || '')));
 }
 
 /** Quién más podría tomar esta entrevista a esa hora. */
 function levantadoresLibres(p) {
-  const dia = (p.fechaCita || '').slice(0, 10);
+  const dia = (p.fechaLimite || '').slice(0, 10);
   if (!dia || !p.hora) return [];
   return S.equipo
     .filter(u => (u.rol === 'analista' || u.rol === 'admin') && u.id !== p.responsable)
     .map(u => {
       const ocupado = S.procesos.some(x =>
         x.responsable === u.id && x.estado !== 'aprobado' &&
-        (x.fechaCita || '').slice(0, 10) === dia && seCruzan(x.hora, p.hora));
+        (x.fechaLimite || '').slice(0, 10) === dia && seCruzan(x.hora, p.hora));
       const carga = S.procesos.filter(x =>
-        x.responsable === u.id && (x.fechaCita || '').slice(0, 10) === dia).length;
+        x.responsable === u.id && (x.fechaLimite || '').slice(0, 10) === dia).length;
       return { u, ocupado, carga };
     })
     .filter(x => !x.ocupado)
@@ -4772,11 +4731,11 @@ function levantadoresLibres(p) {
 
 /** Qué horas de ese mismo día le quedan libres a quien lo tiene. */
 function horasLibres(p) {
-  const dia = (p.fechaCita || '').slice(0, 10);
+  const dia = (p.fechaLimite || '').slice(0, 10);
   if (!dia || !p.responsable) return [];
   const ocupadas = S.procesos
     .filter(x => x.id !== p.id && x.responsable === p.responsable &&
-      x.estado !== 'aprobado' && (x.fechaCita || '').slice(0, 10) === dia)
+      x.estado !== 'aprobado' && (x.fechaLimite || '').slice(0, 10) === dia)
     .map(x => x.hora).filter(Boolean);
   return HORAS.filter(h => h.endsWith(':00') && !ocupadas.some(o => seCruzan(o, h)));
 }

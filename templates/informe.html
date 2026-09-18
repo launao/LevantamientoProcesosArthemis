@@ -93,7 +93,8 @@
     <div class="meta">
       {% if datos.proceso.codigo %}{{ datos.proceso.codigo }}{% endif %}
       {% if datos.proceso.area %} · {{ datos.proceso.area }}{% endif %}
-      · Levantado por {{ datos.proceso.responsable }}
+      · Levantado por {{ datos.proceso.responsable }}{% if datos.proceso.atiende %}
+      · con {{ datos.proceso.atiende }}{% endif %}
     </div>
     <div class="resumen">
       <div><b>{{ datos.avance }}%</b>completo</div>
