@@ -399,9 +399,8 @@ function vistaTablero(m) {
    ═══════════════════════════════════════════════════════════════ */
 function panelHoyVencidos(ps, opciones) {
   const conDueno = (opciones || {}).conDueno;
-  const hoy = ps.filter(p => grupoDe(p, 'fecha') === 'hoy');
-  const vencidos = ps.filter(p => grupoDe(p, 'fecha') === 'vencidos')
-    .sort((a, b) => (a.fechaLimite || '').localeCompare(b.fechaLimite || ''));
+  const hoy = ps.filter(p => grupoDe(p, 'fecha') === 'hoy').sort(porCercania);
+  const vencidos = ps.filter(p => grupoDe(p, 'fecha') === 'vencidos').sort(porCercania);
 
   const linea = p => `<a class="urg-item" href="#/proceso/${p.id}">
     <span class="urg-nom">${esc(p.nombre)}</span>
@@ -480,9 +479,29 @@ function tableroAdmin(m) {
   const audios = ps.reduce((a, p) => a + (p.evidencias || []).filter(e => e.tipo === 'audio').length, 0);
   const av = avanceGlobal();
 
+  const filtrados = ps.filter(pasaFiltros);
+
   m.innerHTML = `
   <div class="topbar"><h1>Tablero</h1><div class="sp"></div>
     <button class="btn p" id="nuevoTab">+ Nuevo proceso</button></div>
+
+  <div class="card filtros-asig" style="grid-template-columns:1.5fr 1fr 1fr auto">
+    <input type="text" id="tBusca" placeholder="Buscar un proceso…" value="${esc(S.buscaAsig || '')}">
+    <select id="tPersona">
+      <option value="">Todas las personas</option>
+      <option value="__sin__" ${S.filtroPersona === '__sin__' ? 'selected' : ''}>Sin asignar</option>
+      ${S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista').map(u =>
+        `<option value="${u.id}" ${S.filtroPersona === u.id ? 'selected' : ''}>${esc(u.nombre)}</option>`).join('')}
+    </select>
+    <select id="tCuando">
+      <option value="">Cualquier fecha de entrega</option>
+      ${[['vencidos', 'Vencidos'], ['hoy', 'Hoy'], ['semana', 'Esta semana'],
+         ['siguiente', 'Semana siguiente'], ['sinfecha', 'Sin fecha']].map(([k, n]) =>
+        `<option value="${k}" ${S.filtroCuando === k ? 'selected' : ''}>${n}</option>`).join('')}
+    </select>
+    ${(S.buscaAsig || S.filtroPersona || S.filtroCuando)
+      ? '<button class="btn sm" id="tLimpiar">Quitar filtros</button>' : ''}
+  </div>
 
   ${panelClinica(ps)}
 
@@ -496,8 +515,8 @@ function tableroAdmin(m) {
 
   <div class="card" style="margin-bottom:16px"><h3>Cada persona</h3>
     <div class="grid g2">
-      ${S.equipo.filter(u => u.rol !== 'lector').map(pe => {
-        const sub = ps.filter(p => p.responsable === pe.id);
+      ${columnasPersonas().filter(c => c.id).map(pe => {
+        const sub = filtrados.filter(p => p.responsable === pe.id);
         const x = sub.length ? Math.round(sub.reduce((t, p) => t + avance(p), 0) / sub.length) : 0;
         const env = sub.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
         const tarde = sub.filter(p => { const pl = textoPlazo(p.fechaLimite); return pl.dias !== null && pl.dias < 0 && p.estado !== 'aprobado'; }).length;
@@ -511,9 +530,11 @@ function tableroAdmin(m) {
             <div style="text-align:right"><b style="font-size:18px">${x}%</b></div>
           </div>
           <div class="bar"><i style="width:${x}%"></i></div>
-          ${sub.length ? `<div class="tiny" style="margin-top:8px">${sub.slice(0, 4).map(p =>
-              `<span class="chip" style="margin:2px 3px 0 0;font-size:11px">${esc(p.nombre)}</span>`).join('')}${
-              sub.length > 4 ? ` +${sub.length - 4}` : ''}</div>` : ''}
+          ${sub.length ? `<div class="mini-lista">${[...sub].sort(porCercania).slice(0, 5).map(p =>
+              `<a class="mini-item" href="#/proceso/${p.id}">
+                 <span class="mini-fecha">${p.fechaLimite ? esc(fechaDia(p.fechaLimite).replace(/^\w+ /, '')) : '—'}</span>
+                 <span class="mini-nom">${esc(recortar(p.nombre, 28))}</span></a>`).join('')}${
+              sub.length > 5 ? `<div class="tiny" style="padding-top:4px">y ${sub.length - 5} más</div>` : ''}</div>` : ''}
         </div>`;
       }).join('') || '<div class="mut">Agrega personas en Equipo.</div>'}
     </div>
@@ -540,8 +561,20 @@ function tableroAdmin(m) {
   </div>`;
 
   document.getElementById('nuevoTab').onclick = modalNuevoProceso;
-  m.querySelectorAll('[data-persona]').forEach(el => el.onclick = () => {
-    S.filtros.resp = el.dataset.persona; S.vista = 'procesos'; render();
+
+  const bindT = (id, clave) => {
+    const el = document.getElementById(id);
+    if (el) el.oninput = el.onchange = () => { S[clave] = el.value; tableroAdmin(m); };
+  };
+  bindT('tBusca', 'buscaAsig'); bindT('tPersona', 'filtroPersona'); bindT('tCuando', 'filtroCuando');
+  const tl = document.getElementById('tLimpiar');
+  if (tl) tl.onclick = () => {
+    S.buscaAsig = ''; S.filtroPersona = ''; S.filtroCuando = ''; tableroAdmin(m);
+  };
+
+  m.querySelectorAll('[data-persona]').forEach(el => el.onclick = e => {
+    if (e.target.closest('a')) return;
+    S.filtros.resp = el.dataset.persona; S.vista = 'procesos'; irA('procesos'); render();
   });
 }
 
@@ -2178,6 +2211,7 @@ function vistaAsignacion(m) {
       <button class="tab ${S.agrupar === 'fecha' ? 'on' : ''}" data-agrupar="fecha">Por fecha</button>
       <button class="tab ${S.agrupar === 'estado' ? 'on' : ''}" data-agrupar="estado">Por estado</button>
     </div>
+    <button class="btn sm" id="organizar">⚙ Columnas</button>
     <button class="btn sm" id="plegarTodo">${S.cerradosAsig.size ? 'Abrir todo' : 'Cerrar todo'}</button>
   </div>
 
@@ -2195,6 +2229,11 @@ function vistaAsignacion(m) {
          ['siguiente', 'Semana siguiente'], ['sinfecha', 'Sin fecha']].map(([k, n]) =>
         `<option value="${k}" ${S.filtroCuando === k ? 'selected' : ''}>${n}</option>`).join('')}
     </select>
+    <div class="tabs densidad">
+      ${[['comodo', 'Cómodo'], ['compacto', 'Compacto'], ['minimo', 'Todos']].map(([k, n]) =>
+        `<button class="tab ${leerPreferencias().densidad === k ? 'on' : ''}" data-dens="${k}"
+          title="${k === 'minimo' ? 'Lo más apretado posible, para ver a todo el equipo de una' : ''}">${n}</button>`).join('')}
+    </div>
     ${(S.buscaAsig || S.filtroPersona || S.filtroCuando)
       ? '<button class="btn sm" id="limpiarF">Quitar filtros</button>' : ''}
   </div>
@@ -2203,9 +2242,12 @@ function vistaAsignacion(m) {
     ? '<div class="tiny" style="margin-bottom:12px">Arrastra una tarjeta a la columna de otra persona para reasignarla. Dentro de cada cajón van de la fecha más cercana a la más lejana.</div>'
     : '<div class="banner">Solo el administrador reparte los procesos.</div>'}
 
-  <div class="tablero">
+  <div class="tablero ${leerPreferencias().densidad}">
     ${columnas.map((col, i) => columnaPersona(col, grupos, i)).join('')}
-  </div>`;
+  </div>
+  ${leerPreferencias().ocultas.length
+    ? `<div class="tiny" style="margin-top:12px">${leerPreferencias().ocultas.length} columna(s) ocultas ·
+       <a href="#" id="verOcultas">mostrar todas</a></div>` : ''}`;
 
   const bind = (id, clave) => {
     const el = document.getElementById(id);
@@ -2213,6 +2255,20 @@ function vistaAsignacion(m) {
     el.oninput = el.onchange = () => { S[clave] = el.value; vistaAsignacion(m); };
   };
   bind('fBusca', 'buscaAsig'); bind('fPersona', 'filtroPersona'); bind('fCuando', 'filtroCuando');
+  document.getElementById('organizar').onclick = () => modalColumnas(m);
+
+  m.querySelectorAll('[data-dens]').forEach(b => b.onclick = () => {
+    leerPreferencias().densidad = b.dataset.dens;
+    guardarPreferencias(); vistaAsignacion(m);
+  });
+
+  const vo = document.getElementById('verOcultas');
+  if (vo) vo.onclick = e => {
+    e.preventDefault();
+    leerPreferencias().ocultas = [];
+    guardarPreferencias(); vistaAsignacion(m);
+  };
+
   const lf = document.getElementById('limpiarF');
   if (lf) lf.onclick = () => {
     S.buscaAsig = ''; S.filtroPersona = ''; S.filtroCuando = ''; vistaAsignacion(m);
@@ -2250,10 +2306,44 @@ function vistaAsignacion(m) {
   conectarArrastre(m);
 }
 
-function columnasPersonas() {
+/* El orden de las columnas y cuáles se muestran son decisión de quien
+   coordina, no mía: con seis personas, cada quien tiene su forma de
+   mirarlas. Queda guardado en este equipo. */
+function leerPreferencias() {
+  if (S.prefsCol) return S.prefsCol;
+  let guardado = {};
+  try { guardado = JSON.parse(localStorage.getItem('lp_columnas') || '{}'); } catch (_) {}
+  S.prefsCol = {
+    orden: Array.isArray(guardado.orden) ? guardado.orden : [],
+    ocultas: Array.isArray(guardado.ocultas) ? guardado.ocultas : [],
+    densidad: guardado.densidad || 'comodo'
+  };
+  return S.prefsCol;
+}
+
+function guardarPreferencias() {
+  try { localStorage.setItem('lp_columnas', JSON.stringify(leerPreferencias())); } catch (_) {}
+}
+
+function todasLasColumnas() {
   const gente = S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista');
-  const cols = [{ id: '', nombre: 'Sin asignar' }].concat(gente);
+  return [{ id: '', nombre: 'Sin asignar' }].concat(gente);
+}
+
+function columnasPersonas() {
+  const prefs = leerPreferencias();
+  let cols = todasLasColumnas();
+
   if (S.filtroPersona === '__sin__') return [cols[0]];
+  if (S.filtroPersona) return cols.filter(c => c.id === S.filtroPersona);
+
+  cols = cols.filter(c => !prefs.ocultas.includes(c.id));
+  if (prefs.orden.length) {
+    cols.sort((a, b) => {
+      const ia = prefs.orden.indexOf(a.id), ib = prefs.orden.indexOf(b.id);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+  }
   return cols;
 }
 
@@ -3900,5 +3990,62 @@ function decidirRevision(pid, decision, m) {
       } catch (e) { toast('No se pudo guardar la decisión'); }
     };
     setTimeout(() => box.querySelector('#revNota').focus(), 50);
+  });
+}
+
+/** Elegir qué columnas se ven y en qué orden. */
+function modalColumnas(m) {
+  const prefs = leerPreferencias();
+  const cols = todasLasColumnas();
+  const ordenadas = [...cols].sort((a, b) => {
+    const ia = prefs.orden.indexOf(a.id), ib = prefs.orden.indexOf(b.id);
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+  });
+
+  modal(`<h3>Organizar las columnas</h3>
+    <p class="mut" style="margin-top:-6px">Súbelas o bájalas para ponerlas en el orden que
+      te sirva, y desmarca las que no quieras ver. Queda guardado en este computador.</p>
+    <div id="colLista">${ordenadas.map((c, i) => `
+      <div class="col-orden" data-id="${c.id}">
+        <label class="flex" style="flex:1;gap:10px;cursor:pointer">
+          <input type="checkbox" data-ver="${c.id}" ${prefs.ocultas.includes(c.id) ? '' : 'checked'}
+            style="width:22px;height:22px">
+          <b>${esc(c.nombre)}</b>
+          <span class="tiny">${S.procesos.filter(p => (p.responsable || '') === c.id).length} proceso(s)</span>
+        </label>
+        <button class="btn sm ic" data-sube="${c.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn sm ic" data-baja="${c.id}" ${i === ordenadas.length - 1 ? 'disabled' : ''}>↓</button>
+      </div>`).join('')}</div>
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" id="colReset">Volver al orden original</button>
+      <button class="btn p right" data-cerrar>Listo</button>
+    </div>`, box => {
+
+    const aplicar = () => { guardarPreferencias(); vistaAsignacion(m); cerrarModal(); modalColumnas(m); };
+
+    box.querySelectorAll('[data-ver]').forEach(cb => cb.onchange = () => {
+      const id = cb.dataset.ver;
+      prefs.ocultas = cb.checked
+        ? prefs.ocultas.filter(x => x !== id)
+        : prefs.ocultas.concat([id]);
+      aplicar();
+    });
+
+    const mover = (id, delta) => {
+      const ids = ordenadas.map(c => c.id);
+      const i = ids.indexOf(id);
+      const j = i + delta;
+      if (j < 0 || j >= ids.length) return;
+      ids.splice(j, 0, ids.splice(i, 1)[0]);
+      prefs.orden = ids;
+      aplicar();
+    };
+    box.querySelectorAll('[data-sube]').forEach(b => b.onclick = () => mover(b.dataset.sube, -1));
+    box.querySelectorAll('[data-baja]').forEach(b => b.onclick = () => mover(b.dataset.baja, 1));
+
+    box.querySelector('#colReset').onclick = () => {
+      prefs.orden = []; prefs.ocultas = [];
+      aplicar();
+    };
   });
 }

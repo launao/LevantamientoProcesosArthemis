@@ -656,3 +656,37 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
 .cita-resuelta .quien{font-weight:600;font-size:15.5px;flex:1;min-width:0}
 .agenda-campos{grid-template-columns:1fr 92px;grid-auto-rows:auto}
 .agenda-campos .campo-quien{grid-column:1/-1}
+
+/* ── Densidad del tablero ─────────────────────── */
+.tablero.compacto{grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.tablero.compacto .tarjeta{padding:10px}
+.tablero.compacto .tarjeta b{font-size:14.5px}
+.tablero.compacto .acord>header{padding:8px 11px;min-height:40px}
+.tablero.compacto .acord-cuerpo{padding:7px;gap:7px}
+.tablero.compacto .bar{height:7px}
+
+.tablero.minimo{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.tablero.minimo .tarjeta{padding:8px}
+.tablero.minimo .tarjeta b{font-size:13.5px;line-height:1.25}
+.tablero.minimo .tarjeta .tiny{display:none}
+.tablero.minimo .tarjeta .pill{display:none}
+.tablero.minimo .acord>header{padding:7px 10px;min-height:36px;font-size:13px}
+.tablero.minimo .acord>header .nom{font-size:13px}
+.tablero.minimo .acord-cuerpo{padding:6px;gap:6px}
+.tablero.minimo .col-cab{padding:8px 10px}
+.tablero.minimo .col-cab b{font-size:14px}
+.tablero.minimo .bar{height:6px}
+.filtros-asig .densidad{justify-self:end}
+.filtros-asig .densidad .tab{padding:8px 13px;font-size:14px;min-height:40px}
+
+/* ── Organizar columnas ───────────────────────── */
+.col-orden{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1.5px solid var(--line);
+  border-radius:9px;margin-bottom:8px;background:var(--surface)}
+
+/* ── Mini lista en las tarjetas de persona ────── */
+.mini-lista{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+.mini-item{display:flex;gap:9px;align-items:baseline;padding:4px 0;text-decoration:none;
+  color:var(--ink-2);font-size:14px}
+.mini-item:hover{color:var(--accent)}
+.mini-fecha{font-size:12.5px;color:var(--ink-3);min-width:56px;font-variant-numeric:tabular-nums}
+.mini-nom{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
