@@ -3,6 +3,7 @@ api.py — API REST.
 
 Todas las rutas cuelgan de /api salvo /media/<id>, que sirve fotos y audios.
 """
+import base64
 import csv
 import hashlib
 import re
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request, send_file, Response
 
 import db as D
+import documentos as Doc
 import ia
 from sanitizar import limpiar_respuestas, a_texto_plano, limpiar_html
 from auth import (usuario_actual, iniciar_sesion, cerrar_sesion, login_required,
@@ -184,6 +186,7 @@ def _procesos(solo_de=None):
             "fechaLimite": str(p.get("fecha_limite") or ""),
             "atiende": p.get("atiende") or "",
             "hora": p.get("hora") or "",
+            "sesiones": D.jload(p.get("sesiones"), []),
             "notasClinica": p.get("notas_clinica") or "",
             "notaVista": p.get("nota_vista") or "",
             "notaRevision": p.get("nota_revision") or "",
@@ -758,6 +761,395 @@ def marcar_nota_vista(pid):
     D.execute("UPDATE procesos SET nota_vista=? WHERE id=?",
               (p["notas_clinica"] or "", pid))
     return jsonify({"ok": True})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Documentos de análisis: revisión, aprobación y comentarios
+# ═══════════════════════════════════════════════════════════════════════════
+
+@api.post("/documentos")
+@rol_required("admin")
+def crear_documento():
+    """Convierte un análisis en documento revisable.
+
+    Se guardan también las fotos, porque el valor del documento está en
+    poder mirar el formato mientras se lee la lista de campos.
+    """
+    d = request.get_json(silent=True) or {}
+    lote = D.row("SELECT * FROM analisis_lote WHERE id=?", (d.get("lote") or "",))
+    if lote:
+        contenido = D.jload(lote["contenido"], {})
+        ids = D.jload(lote["procesos"], [])
+        titulo = d.get("titulo") or lote["titulo"] or "Análisis"
+        origen = "lote:" + lote["id"]
+    else:
+        ana = D.row("SELECT * FROM analisis WHERE id=?", (d.get("analisis") or "",))
+        if not ana:
+            return jsonify({"error": "no_existe"}), 404
+        contenido = D.jload(ana["contenido"], {})
+        ids = [ana["proceso_id"]]
+        p = D.row("SELECT nombre FROM procesos WHERE id=?", (ana["proceso_id"],))
+        titulo = d.get("titulo") or (p["nombre"] if p else "Análisis")
+        origen = "analisis:" + ana["id"]
+
+    nombres = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM procesos")}
+    fotos = _fotos_del_documento(ids)
+
+    u = usuario_actual()
+    did = Doc.crear(titulo, contenido, [nombres.get(x, x) for x in ids],
+                    fotos, u["id"], origen)
+    auditar("documento_creado", "documento", did, titulo)
+    return jsonify({"ok": True, "id": did, "documento": Doc.leer(did)})
+
+
+def _fotos_del_documento(ids):
+    """Las fotos de estos procesos, con su pregunta y su proceso."""
+    plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
+    etiquetas = {c["id"]: c["etiqueta"]
+                 for s in plantilla.get("secciones", []) for c in s.get("campos", [])}
+
+    def donde(campo):
+        if not campo:
+            return "general"
+        partes = campo.split(":")
+        base = etiquetas.get(partes[0], partes[0])
+        if len(partes) == 3:
+            return f"{base}, sub-actividad {int(partes[1])+1}.{int(partes[2])+1}"
+        if len(partes) == 2:
+            return f"{base}, actividad {int(partes[1])+1}"
+        return base
+
+    salida = []
+    for pid in ids:
+        p = D.row("SELECT nombre FROM procesos WHERE id=?", (pid,))
+        if not p:
+            continue
+        for e in D.rows("SELECT media_id, campo_id, nota FROM evidencias "
+                        "WHERE proceso_id=? AND tipo='foto' ORDER BY creado", (pid,)):
+            salida.append({"mediaId": e["media_id"], "proceso": p["nombre"],
+                           "donde": donde(e["campo_id"]), "nota": e["nota"] or ""})
+    return salida
+
+
+@api.get("/documentos")
+@rol_required("admin")
+def listar_documentos():
+    nombres = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM usuarios")}
+    docs = Doc.listar()
+    for x in docs:
+        x["creadoPorNombre"] = nombres.get(x["creadoPor"], "")
+        x["comentarios"] = len([c for c in Doc.comentarios(x["id"]) if not c["resuelto"]])
+    return jsonify({"documentos": docs})
+
+
+@api.get("/documentos-mios")
+@login_required
+def documentos_mios():
+    """Los que ya salieron hacia la clínica."""
+    u = usuario_actual()
+    if u["rol"] not in ("admin", "clinica"):
+        return jsonify({"documentos": []})
+    filas = D.rows("SELECT * FROM documentos WHERE estado IN ('con_cliente','aprobado') "
+                   "ORDER BY creado DESC LIMIT 50")
+    return jsonify({"documentos": [
+        {k: v for k, v in Doc._armar(f).items() if k != "token"} for f in filas]})
+
+
+@api.get("/documentos/<did>")
+@login_required
+def leer_documento(did):
+    doc = Doc.leer(did)
+    if not doc:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    # La clínica solo ve el documento cuando ya salió a su nombre, y sin la
+    # parte técnica.
+    if u["rol"] == "clinica":
+        if doc["estado"] not in ("con_cliente", "aprobado"):
+            return jsonify({"error": "todavia_no"}), 403
+        doc = Doc.para_cliente(doc)
+    elif u["rol"] != "admin":
+        return jsonify({"error": "sin_permiso"}), 403
+
+    return jsonify({"documento": doc, "comentarios": Doc.comentarios(did),
+                    "secciones": Doc.SECCIONES,
+                    "paraCliente": sorted(Doc.PARA_CLIENTE)})
+
+
+@api.put("/documentos/<did>")
+@rol_required("admin")
+def editar_documento(did):
+    """El administrador ajusta el texto antes de que salga."""
+    if not Doc.leer(did):
+        return jsonify({"error": "no_existe"}), 404
+    d = request.get_json(silent=True) or {}
+    campos, params = [], []
+    if "titulo" in d:
+        campos.append("titulo=?")
+        params.append((d["titulo"] or "").strip()[:200])
+    if isinstance(d.get("contenido"), dict):
+        campos.append("contenido=?")
+        params.append(D.jdump(limpiar_respuestas(d["contenido"])))
+    if not campos:
+        return jsonify({"ok": True})
+    params.append(did)
+    D.execute(f"UPDATE documentos SET {', '.join(campos)}, actualizado={D.NOW} WHERE id=?",
+              tuple(params))
+    return jsonify({"ok": True, "documento": Doc.leer(did)})
+
+
+@api.post("/documentos/<did>/estado")
+@login_required
+def estado_documento(did):
+    doc = Doc.leer(did)
+    if not doc:
+        return jsonify({"error": "no_existe"}), 404
+
+    u = usuario_actual()
+    d = request.get_json(silent=True) or {}
+    nuevo = d.get("estado")
+
+    if u["rol"] == "clinica":
+        # El cliente solo puede dar su visto bueno a lo que ya le llegó.
+        if nuevo != "aprobado" or doc["estado"] != "con_cliente":
+            return jsonify({"error": "sin_permiso"}), 403
+        D.execute(f"UPDATE documentos SET estado='aprobado', ok_cliente=?, "
+                  f"actualizado={D.NOW} WHERE id=?", (_now(), did))
+        auditar("documento_ok_cliente", "documento", did)
+        return jsonify({"ok": True, "estado": "aprobado"})
+
+    if u["rol"] != "admin":
+        return jsonify({"error": "sin_permiso"}), 403
+    if nuevo not in Doc.ESTADOS:
+        return jsonify({"error": "estado_invalido"}), 400
+
+    extra, params = "", []
+    if nuevo == "revisado":
+        extra = ", aprobado_por=?, aprobado_en=?"
+        params = [u["id"], _now()]
+    elif nuevo == "con_cliente":
+        extra = ", enviado_en=?"
+        params = [_now()]
+
+    D.execute(f"UPDATE documentos SET estado=?{extra}, actualizado={D.NOW} WHERE id=?",
+              tuple([nuevo] + params + [did]))
+    auditar("documento_" + nuevo, "documento", did)
+    return jsonify({"ok": True, "estado": nuevo, "documento": Doc.leer(did)})
+
+
+@api.post("/documentos/<did>/comentarios")
+@login_required
+def comentar_documento(did):
+    doc = Doc.leer(did)
+    if not doc:
+        return jsonify({"error": "no_existe"}), 404
+
+    u = usuario_actual()
+    if u["rol"] not in ("admin", "clinica"):
+        return jsonify({"error": "sin_permiso"}), 403
+    if u["rol"] == "clinica" and doc["estado"] not in ("con_cliente", "aprobado"):
+        return jsonify({"error": "todavia_no"}), 403
+
+    d = request.get_json(silent=True) or {}
+    texto = (d.get("texto") or "").strip()
+    if not texto:
+        return jsonify({"error": "vacio"}), 400
+
+    cid = Doc.sumar_comentario(did, d.get("ancla"), d.get("cita"), texto,
+                               u["id"], u["nombre"], u["rol"] == "clinica")
+    auditar("comentario", "documento", did, texto[:80])
+    return jsonify({"ok": True, "id": cid, "comentarios": Doc.comentarios(did)})
+
+
+@api.post("/comentarios/<cid>/resolver")
+@rol_required("admin")
+def resolver_comentario(cid):
+    d = request.get_json(silent=True) or {}
+    D.execute("UPDATE comentarios SET resuelto=1, respuesta=? WHERE id=?",
+              ((d.get("respuesta") or "").strip()[:2000], cid))
+    return jsonify({"ok": True})
+
+
+def documento_html(did, para_cliente=False, publico=False):
+    """El documento como una sola página, con las fotos embebidas.
+
+    Se incrustan en base64 a propósito: un archivo que se guarda o se
+    imprime no puede depender de que el servidor siga en pie.
+    """
+    doc = Doc.leer(did)
+    if not doc:
+        return None
+    if para_cliente:
+        doc = Doc.para_cliente(doc)
+
+    c = doc["contenido"]
+    partes = []
+
+    def lista(items, fn):
+        return "".join(fn(x) for x in (items or []))
+
+    def esc2(t):
+        from markupsafe import escape
+        return str(escape(str(t if t is not None else "")))
+
+    if c.get("panorama"):
+        partes.append(f"<section><h2>Panorama general</h2><p>{esc2(c['panorama'])}</p></section>")
+
+    if c.get("cadenas"):
+        partes.append("<section><h2>Cómo se encadena el trabajo</h2>" + lista(
+            c["cadenas"], lambda x: (
+                f"<div class='caja'><h3>{esc2(x.get('nombre'))}</h3>"
+                f"<p class='flujo'>{' → '.join(esc2(p) for p in x.get('procesos') or [])}</p>"
+                f"<p>{esc2(x.get('descripcion'))}</p>"
+                + ("<ul>" + lista(x.get("rupturas"), lambda r: f"<li>{esc2(r)}</li>") + "</ul>"
+                   if x.get("rupturas") else "") + "</div>")) + "</section>")
+
+    if c.get("campos_formulario"):
+        partes.append("<section><h2>Los formatos y sus campos</h2>" + lista(
+            c["campos_formulario"], lambda f: (
+                f"<div class='caja'><h3>{esc2(f.get('formulario'))}</h3>"
+                f"<p class='meta'>{esc2(f.get('proceso'))} · {esc2(f.get('soporte'))}</p>"
+                "<table><thead><tr><th>Campo</th><th>Tipo</th><th>Obligatorio</th>"
+                "<th>Quién lo llena</th><th>De dónde sale</th></tr></thead><tbody>"
+                + lista(f.get("campos"), lambda k: (
+                    f"<tr><td><b>{esc2(k.get('nombre'))}</b></td><td>{esc2(k.get('tipo'))}</td>"
+                    f"<td>{'Sí' if k.get('obligatorio') else 'No'}</td>"
+                    f"<td>{esc2(k.get('quien_lo_llena'))}</td>"
+                    f"<td>{esc2(k.get('de_donde_sale'))}</td></tr>"))
+                + "</tbody></table></div>")) + "</section>")
+
+    if c.get("duplicidades"):
+        partes.append("<section><h2>Lo que se repite</h2><ul>" + lista(
+            c["duplicidades"], lambda x: (
+                f"<li><b>{esc2(x.get('que_se_repite'))}</b>"
+                f"<div class='meta'>en: {', '.join(esc2(p) for p in x.get('procesos') or [])}</div>"
+                f"<div>{esc2(x.get('propuesta'))}</div></li>")) + "</ul></section>")
+
+    if not para_cliente and c.get("modulos_sugeridos"):
+        partes.append("<section><h2>Módulos propuestos</h2>" + lista(
+            c["modulos_sugeridos"], lambda x: (
+                f"<div class='caja'><h3>{esc2(x.get('modulo'))} "
+                f"<span class='et'>prioridad {esc2(x.get('prioridad'))}</span></h3>"
+                f"<p>{esc2(x.get('por_que'))}</p>"
+                + ("<p class='meta'>Cubre: " + ", ".join(esc2(p) for p in x.get("cubre") or []) + "</p>"
+                   if x.get("cubre") else "")
+                + ("<ul>" + lista(x.get("funciones"), lambda f: f"<li>{esc2(f)}</li>") + "</ul>"
+                   if x.get("funciones") else "")
+                + ("<p class='meta'>Datos: " + ", ".join(esc2(d2) for d2 in x.get("datos_clave") or []) + "</p>"
+                   if x.get("datos_clave") else "") + "</div>")) + "</section>")
+
+    if not para_cliente and c.get("automatizacion"):
+        partes.append("<section><h2>Oportunidades de automatización</h2>" + lista(
+            c["automatizacion"], lambda x: (
+                f"<div class='caja'><h3>{esc2(x.get('que'))} "
+                f"<span class='et'>{esc2(x.get('tecnologia'))}</span></h3>"
+                f"<p>{esc2(x.get('como'))}</p>"
+                f"<p class='meta'>Se dispara con: {esc2(x.get('dispara'))} · "
+                f"Ahorra: {esc2(x.get('ahorro'))} · Esfuerzo: {esc2(x.get('esfuerzo'))}</p>"
+                + (f"<p class='meta'>Riesgo: {esc2(x.get('riesgo'))}</p>" if x.get("riesgo") else "")
+                + "</div>")) + "</section>")
+
+    if c.get("vacios"):
+        partes.append("<section><h2>Qué falta levantar</h2><ul>" + lista(
+            c["vacios"], lambda x: f"<li>{esc2(x)}</li>") + "</ul></section>")
+
+    if not para_cliente and c.get("siguiente_paso"):
+        partes.append(f"<section><div class='destacado'><b>Por dónde empezar:</b> "
+                      f"{esc2(c['siguiente_paso'])}</div></section>")
+
+    # Las fotos, embebidas
+    fotos_html = []
+    for i, f in enumerate(doc.get("fotos") or []):
+        m = D.row("SELECT content_type, data, ruta FROM media WHERE id=?", (f["mediaId"],))
+        if not m:
+            continue
+        if m.get("ruta"):
+            try:
+                with open(m["ruta"], "rb") as fh:
+                    datos = fh.read()
+            except OSError:
+                continue
+        else:
+            datos = D.to_bytes(m["data"])
+        if not datos:
+            continue
+        datos, ctype = ia.reducir_imagen(datos, m["content_type"] or "image/jpeg")
+        b64 = base64.b64encode(datos).decode("ascii")
+        fotos_html.append(
+            f"<figure><img src='data:{ctype};base64,{b64}'>"
+            f"<figcaption>Foto {i+1} · {esc2(f.get('proceso'))} — {esc2(f.get('donde'))}"
+            + (f"<br>{esc2(f.get('nota'))}" if f.get("nota") else "") + "</figcaption></figure>")
+    if fotos_html:
+        partes.append("<section class='fotos'><h2>Evidencia fotográfica</h2>"
+                      + "".join(fotos_html) + "</section>")
+
+    coms = [x for x in Doc.comentarios(did) if not x["resuelto"]]
+    if coms and not publico:
+        partes.append("<section><h2>Comentarios</h2><ul>" + "".join(
+            f"<li><b>{esc2(x['autor'])}</b>"
+            + (f" <span class='meta'>sobre: {esc2(x['cita'])}</span>" if x["cita"] else "")
+            + f"<div>{esc2(x['texto'])}</div></li>" for x in coms) + "</ul></section>")
+
+    return doc, "".join(partes)
+
+
+@api.put("/procesos/<pid>/sesiones")
+@login_required
+def guardar_sesiones(pid):
+    """Las visitas acordadas.
+
+    Un levantamiento no siempre cabe en una sentada: muchas veces la
+    clínica dice "venga toda la semana de 6 a 9" o cambia la hora entre
+    un día y otro. Cada sesión es una visita con su día y su horario.
+    """
+    u = usuario_actual()
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    if u["rol"] not in ("admin", "clinica") and not _mio(p, u):
+        return jsonify({"error": "sin_permiso"}), 403
+
+    d = request.get_json(silent=True) or {}
+    crudas = d.get("sesiones")
+    if not isinstance(crudas, list):
+        return jsonify({"error": "formato_invalido"}), 400
+
+    limpias = []
+    for s in crudas[:30]:
+        if not isinstance(s, dict):
+            continue
+        fecha = (s.get("fecha") or "").strip()[:10]
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", fecha):
+            continue
+        def hora(v):
+            v = (v or "").strip()[:5]
+            return v if re.match(r"^\d{2}:\d{2}$", v) else ""
+        limpias.append({
+            "fecha": fecha,
+            "inicio": hora(s.get("inicio")),
+            "fin": hora(s.get("fin")),
+            "atiende": (s.get("atiende") or "").strip()[:200],
+            "nota": (s.get("nota") or "").strip()[:300],
+        })
+
+    limpias.sort(key=lambda x: (x["fecha"], x["inicio"] or "99:99"))
+
+    # La primera visita manda: es la que sale en los tableros y la que
+    # usa el cálculo de choques, para no tener dos verdades.
+    primera = limpias[0] if limpias else None
+    D.execute(
+        f"UPDATE procesos SET sesiones=?, fecha_limite=?, hora=?, actualizado={D.NOW} "
+        f"WHERE id=?",
+        (D.jdump(limpias),
+         primera["fecha"] if primera else None,
+         (primera["inicio"] if primera else None) or None,
+         pid))
+    if primera and primera.get("atiende"):
+        D.execute("UPDATE procesos SET atiende=? WHERE id=? AND (atiende IS NULL OR atiende='')",
+                  (primera["atiende"], pid))
+
+    auditar("sesiones", "proceso", pid, f"{len(limpias)} visita(s)")
+    return jsonify({"ok": True, "sesiones": limpias})
 
 
 @api.get("/indice")

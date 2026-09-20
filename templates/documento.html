@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ doc.titulo }}</title>
+<style>
+  :root{--ink:#0C1A2A;--ink2:#3C4C5C;--ink3:#6B7C8B;--linea:#DCD6CA;--acento:#3A7CA5;--oro:#E8B931}
+  *{box-sizing:border-box}
+  body{margin:0;background:#F1F3EF;color:var(--ink);line-height:1.65;font-size:16px;
+    font-family:'Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+  .hoja{max-width:860px;margin:0 auto;background:#fff;padding:0 0 60px;min-height:100vh}
+  header.tapa{padding:44px 48px 32px;border-bottom:3px solid var(--ink);
+    background:linear-gradient(160deg,#EEF4F7,#fff)}
+  .org{font-size:11.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink3);font-weight:700}
+  h1{margin:10px 0 8px;font-size:31px;letter-spacing:-.6px;line-height:1.2}
+  .sub{color:var(--ink2);font-size:15px}
+  .meta-tapa{display:flex;gap:26px;flex-wrap:wrap;margin-top:22px;font-size:13.5px;color:var(--ink2)}
+  .meta-tapa b{display:block;color:var(--ink);font-size:15px}
+  .sello{display:inline-block;margin-top:18px;padding:7px 16px;border-radius:999px;
+    font-size:13px;font-weight:700;background:#E7F3EC;color:#1F7A4D;border:1.5px solid #9AD3B4}
+  .sello.pendiente{background:#FDF3E0;color:#9A6512;border-color:#E8C88A}
+  main{padding:0 48px}
+  section{padding:30px 0;border-bottom:1px solid var(--linea)}
+  section:last-child{border-bottom:0}
+  h2{font-size:13px;letter-spacing:1.3px;text-transform:uppercase;color:var(--acento);
+    font-weight:700;margin:0 0 16px}
+  h3{font-size:17.5px;margin:0 0 6px}
+  p{margin:0 0 12px}
+  ul{margin:0 0 12px;padding-left:22px}
+  li{margin-bottom:10px}
+  .caja{border:1.5px solid var(--linea);border-left:4px solid var(--acento);border-radius:10px;
+    padding:18px 20px;margin-bottom:16px}
+  .flujo{font-weight:600;color:var(--acento)}
+  .meta{font-size:13.5px;color:var(--ink3);margin:4px 0}
+  .et{font-size:11.5px;font-weight:700;background:#EEF4F7;color:var(--acento);
+    border-radius:999px;padding:2px 10px;vertical-align:middle}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin-top:10px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--ink3);
+    padding:9px 10px;border-bottom:2px solid var(--linea)}
+  td{padding:10px;border-bottom:1px solid var(--linea);vertical-align:top}
+  .destacado{background:#FDF8E8;border:1.5px solid var(--oro);border-radius:10px;padding:16px 20px;font-size:16.5px}
+  .fotos figure{margin:0 0 26px;border:1.5px solid var(--linea);border-radius:10px;overflow:hidden}
+  .fotos img{display:block;width:100%}
+  .fotos figcaption{padding:11px 14px;background:#F6F7F4;font-size:13px;color:var(--ink2)}
+  footer{padding:30px 48px;color:var(--ink3);font-size:12.5px;text-align:center}
+  @media print{
+    body{background:#fff}
+    .hoja{max-width:none}
+    header.tapa{background:#fff}
+    section{page-break-inside:avoid}
+    .fotos figure{page-break-inside:avoid}
+  }
+  @media (max-width:700px){
+    header.tapa,main,footer{padding-left:20px;padding-right:20px}
+    h1{font-size:25px}
+  }
+</style>
+</head>
+<body>
+<div class="hoja">
+  <header class="tapa">
+    {% if organizacion %}<div class="org">{{ organizacion }}</div>{% endif %}
+    <h1>{{ doc.titulo }}</h1>
+    <div class="sub">Análisis del levantamiento de procesos</div>
+
+    <div class="meta-tapa">
+      <div><b>{{ doc.procesos|length }}</b>procesos analizados</div>
+      <div><b>{{ doc.fotos|length }}</b>fotos de evidencia</div>
+      {% if doc.aprobadoEn %}<div><b>{{ doc.aprobadoEn[:10] }}</b>revisado</div>{% endif %}
+    </div>
+
+    {% if doc.procesos %}
+    <div class="meta" style="margin-top:14px">{{ doc.procesos|join(' · ') }}</div>
+    {% endif %}
+
+    {% if doc.estado == 'aprobado' %}
+      <div class="sello">✓ Aprobado por la clínica</div>
+    {% elif doc.estado == 'con_cliente' %}
+      <div class="sello pendiente">Pendiente del visto bueno de la clínica</div>
+    {% elif doc.estado == 'revisado' %}
+      <div class="sello pendiente">Revisado por la coordinación</div>
+    {% else %}
+      <div class="sello pendiente">Borrador de trabajo</div>
+    {% endif %}
+  </header>
+
+  <main>{{ cuerpo|safe }}</main>
+
+  <footer>
+    Documento generado con apoyo de inteligencia artificial a partir del levantamiento
+    en campo, y revisado por la coordinación.
+    {% if para_cliente %}<br>Versión para la institución.{% endif %}
+  </footer>
+</div>
+</body>
+</html>

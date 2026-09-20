@@ -483,6 +483,13 @@ es una sola funcionalidad, no tres.
 - Distingue el proceso de la herramienta. "Lo llevan en Excel" no es un proceso, es \
 un síntoma.
 - En español de Colombia, concreto. Quien lee esto va a construir software.
+- Los campos de los formularios son lo más valioso que puedes sacar de las fotos. \
+Transcríbelos uno por uno con su rótulo exacto: son las casillas que tendrá la pantalla. \
+Si una foto muestra un formato, no resumas: enumera.
+- En 'automatizacion' piensa en lo que hoy es posible: webhooks entre sistemas, agentes \
+que hacen una tarea repetitiva, modelos de lenguaje que leen un documento y extraen \
+datos, reglas que validan sin intervención. No propongas magia: si algo necesita que \
+alguien revise, dilo.
 
 Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor ni marcas de código:
 
@@ -505,6 +512,15 @@ Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor ni marcas 
      "procesos": ["nombres"],
      "propuesta": "cómo resolverlo de una sola vez"}
   ],
+  "campos_formulario": [
+    {"formulario": "cómo lo llaman ellos: 'hoja de admisión', 'planilla de turnos'",
+     "proceso": "a qué proceso pertenece",
+     "soporte": "papel | pantalla del sistema | cuaderno | Excel",
+     "campos": [
+       {"nombre": "el rótulo tal como aparece", "tipo": "texto | número | fecha | selección | firma | checkbox",
+        "obligatorio": true, "quien_lo_llena": "cargo", "de_donde_sale": "lo trae el paciente | lo calcula el sistema | lo escribe quien atiende"}
+     ]}
+  ],
   "modulos_sugeridos": [
     {"modulo": "nombre del módulo",
      "cubre": ["nombres de los procesos que quedarían dentro"],
@@ -515,6 +531,15 @@ Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor ni marcas 
   ],
   "hallazgos_en_fotos": [
     {"foto": 1, "proceso": "a qué proceso pertenece", "observacion": "qué se ve, con detalle: campos, sellos, casillas"}
+  ],
+  "automatizacion": [
+    {"que": "qué tarea concreta se automatiza",
+     "como": "cómo funcionaría, en dos o tres frases",
+     "tecnologia": "webhook | agente | skill | modelo de lenguaje | regla del sistema | integración",
+     "dispara": "qué evento lo activa",
+     "ahorro": "qué se deja de hacer a mano",
+     "esfuerzo": "bajo | medio | alto",
+     "riesgo": "qué puede salir mal y cómo se controla"}
   ],
   "vacios": ["qué falta levantar para poder diseñar con seguridad"],
   "siguiente_paso": "qué haría usted primero, en una frase"

@@ -17,7 +17,8 @@ except ImportError:
 
 import db as D
 from schema import init_db
-from api import api, servir_media, capture_media, datos_informe, informe_media
+from api import (api, servir_media, capture_media, datos_informe, informe_media,
+                 documento_html)
 from auth import usuario_actual
 
 
@@ -91,6 +92,31 @@ def crear_app():
         resp.headers["Service-Worker-Allowed"] = "/"
         resp.headers["Cache-Control"] = "no-cache"
         return resp
+
+    @app.get("/doc/<did>")
+    def documento(did):
+        """El documento para leer, guardar o imprimir. Quien no sea de la
+        coordinación ve la versión sin la parte técnica."""
+        from auth import usuario_actual as quien
+        u = quien()
+        if not u:
+            return redirect(url_for("login_view"))
+
+        para_cliente = u["rol"] != "admin"
+        res = documento_html(did, para_cliente=para_cliente)
+        if not res:
+            return render_template("documento.html", doc=None, cuerpo="",
+                                   organizacion="", para_cliente=False), 404
+        doc, cuerpo = res
+        if u["rol"] == "clinica" and doc["estado"] not in ("con_cliente", "aprobado"):
+            return render_template("documento.html", doc=None, cuerpo="",
+                                   organizacion="", para_cliente=True), 403
+
+        import db as D
+        cfg = D.jload(D.row("SELECT data FROM config WHERE id=1")["data"], {})
+        return render_template("documento.html", doc=doc, cuerpo=cuerpo,
+                               organizacion=cfg.get("organizacion", ""),
+                               para_cliente=para_cliente)
 
     @app.get("/healthz")
     def healthz():

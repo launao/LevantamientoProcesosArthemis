@@ -147,6 +147,39 @@ def _ddl():
               creado      {ts}
             )""",
 
+        f"""CREATE TABLE IF NOT EXISTS documentos (
+              id           {txt} PRIMARY KEY,
+              titulo       {txt} NOT NULL,
+              origen       {txt},
+              procesos     {txt},
+              contenido    {txt} NOT NULL,
+              fotos        {txt},
+              estado       {txt} DEFAULT 'borrador',
+              creado_por   {txt},
+              aprobado_por {txt},
+              aprobado_en  {txt},
+              enviado_en   {txt},
+              visto_cliente {txt},
+              ok_cliente   {txt},
+              token        {txt},
+              creado       {ts},
+              actualizado  {ts}
+            )""",
+
+        f"""CREATE TABLE IF NOT EXISTS comentarios (
+              id          {txt} PRIMARY KEY,
+              documento_id {txt} NOT NULL,
+              ancla       {txt},
+              cita        {txt},
+              texto       {txt} NOT NULL,
+              autor_id    {txt},
+              autor_nombre {txt},
+              es_cliente  {intt} DEFAULT 0,
+              resuelto    {intt} DEFAULT 0,
+              respuesta   {txt},
+              creado      {ts}
+            )""",
+
         f"""CREATE TABLE IF NOT EXISTS secretos (
               clave  {txt} PRIMARY KEY,
               valor  {txt} NOT NULL,
@@ -173,6 +206,7 @@ def _ddl():
         "CREATE INDEX IF NOT EXISTS ix_env_proc ON envios(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_ver_proc ON versiones(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_ana_proc ON analisis(proceso_id)",
+        "CREATE INDEX IF NOT EXISTS ix_com_doc ON comentarios(documento_id)",
         "CREATE INDEX IF NOT EXISTS ix_share_proc ON share_tokens(proceso_id)",
     ]
 
@@ -198,6 +232,7 @@ COLUMNAS_NUEVAS = [
     ("procesos", "hora", "TEXT"),
     ("procesos", "fecha_cita", "TEXT"),
     ("procesos", "nota_vista", "TEXT"),
+    ("procesos", "sesiones", "TEXT"),
 ]
 
 

@@ -320,11 +320,13 @@ function render() {
           ${nav('avance', '◱', 'Hoy y mañana', v)}
           ${nav('agenda', '◷', 'Agenda', v)}
           ${nav('mapear', '✎', 'Por mapear', v)}
+          ${nav('documentos', '📄', 'Documentos', v)}
           ${nav('procesos', '▤', 'Procesos', v)}
           ${nav('mapa', '⤳', 'Mapa', v)}
         ` : `
         ${nav('tablero', '◱', esAdmin() ? 'Tablero' : 'Mi avance', v)}
         ${esAdmin() ? navConCuenta('revision', '✓', 'Revisión', v, porRevisar().length) : ''}
+        ${esAdmin() ? nav('documentos', '📄', 'Documentos', v) : ''}
         ${nav('procesos', '▤', 'Procesos', v)}
         ${nav('mapa', '⤳', 'Mapa', v)}
         ${esAdmin() ? nav('asignacion', '⇄', 'Asignación', v) : ''}
@@ -357,15 +359,15 @@ function render() {
   const rutas = { tablero: vistaTablero, procesos: vistaProcesos, proceso: vistaProceso,
                   asignacion: vistaAsignacion, equipo: vistaEquipo, agenda: vistaAgenda,
                   mapa: vistaMapa, avance: vistaAvanceClinica, revision: vistaRevision,
-                  mapear: vistaPorMapear,
+                  mapear: vistaPorMapear, documentos: vistaDocumentos,
                   plantilla: vistaPlantilla,
                   ajustes: vistaAjustes, cuenta: vistaAjustes };
-  if (esClinica() && !['agenda', 'avance', 'mapear', 'procesos', 'proceso', 'mapa'].includes(v)) {
+  if (esClinica() && !['agenda', 'avance', 'mapear', 'documentos', 'procesos', 'proceso', 'mapa'].includes(v)) {
     S.vista = 'avance'; return render();
   }
   // Las pantallas de configuración son solo del administrador. Se comprueba
   // aquí además de ocultar el menú, por si alguien llega por otra vía.
-  const soloAdmin = ['asignacion', 'equipo', 'plantilla', 'revision'];
+  const soloAdmin = ['asignacion', 'equipo', 'plantilla', 'revision', 'documentos'];
   if (soloAdmin.includes(v) && !esAdmin()) { S.vista = 'tablero'; return render(); }
   (rutas[v] || vistaTablero)(m);
 }
@@ -469,6 +471,8 @@ function tableroPersonal(m) {
     </div>` : '';
   })()}
 
+  ${wAgendaDia()}
+
   ${panelHoyVencidos(ps)}
 
   <div class="grid g4" style="margin-bottom:16px">
@@ -488,6 +492,7 @@ function tableroPersonal(m) {
 
   const b = document.getElementById('nuevoTab');
   if (b) b.onclick = modalNuevoProceso;
+  conectarAgendaDia(m);
   m.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => abrirProceso(tr.dataset.id));
 }
 
@@ -500,6 +505,7 @@ function tableroPersonal(m) {
    avisando, y solo después los totales.
    ═══════════════════════════════════════════════════════════════ */
 const WIDGETS = [
+  { k: 'agenda',   n: 'Agenda del día' },
   { k: 'progreso', n: 'Progreso del día' },
   { k: 'hoy',      n: 'Lo de hoy' },
   { k: 'manana',   n: 'Lo de mañana' },
@@ -532,6 +538,7 @@ function tableroAdmin(m) {
   const prefs = prefsWidgets();
 
   const piezas = {
+    agenda:   () => wAgendaDia(),
     progreso: () => wProgresoDia(filtrados),
     hoy:      () => wDia(filtrados, 'hoy', 'Hoy vienen a levantar', 'Hoy no hay ninguno programado.'),
     manana:   () => wDia(filtrados, 'manana', 'Mañana', 'Mañana todavía no hay nada.'),
@@ -546,7 +553,8 @@ function tableroAdmin(m) {
 
   m.innerHTML = `
   <div class="topbar"><h1>Tablero</h1><div class="sp"></div>
-    <button class="btn sm" id="organizarW">⚙ Bloques</button></div>
+    <button class="btn sm" id="organizarW">⚙ Bloques</button>
+    <button class="btn p" id="nuevoTab">+ Nuevo proceso</button></div>
 
   <div class="card filtros-asig" style="grid-template-columns:1.5fr 1fr 1fr auto">
     <input type="text" id="tBusca" placeholder="Buscar un proceso…" value="${esc(S.buscaAsig || '')}">
@@ -580,6 +588,8 @@ function tableroAdmin(m) {
   };
 
   document.getElementById('organizarW').onclick = () => modalWidgets(m);
+  document.getElementById('nuevoTab').onclick = modalNuevoProceso;
+  conectarAgendaDia(m);
 
   m.querySelectorAll('[data-persona]').forEach(el => el.onclick = e => {
     if (e.target.closest('a')) return;
@@ -3714,6 +3724,8 @@ function vistaAvanceClinica(m) {
     Hay ${sinAtender.length} proceso(s) donde todavía no han dicho quién de la clínica responde.
     Se asignan desde <b>Agenda</b>.</div>` : ''}
 
+  ${wAgendaDia()}
+
   ${panelClinica(ps)}
 
   <div class="grid g2" style="margin-bottom:16px">
@@ -3755,6 +3767,7 @@ function vistaAvanceClinica(m) {
   </div>`;
 
   document.getElementById('proponer').onclick = modalProponer;
+  conectarAgendaDia(m);
   conectarAgenda(m);
 }
 
@@ -3775,11 +3788,37 @@ function modalProponer() {
     <div class="grid g2">
       <label class="f"><span class="lbl">¿De qué área es?</span>
         <select id="ppArea">${(S.config.areas || []).map(a => `<option>${esc(a)}</option>`).join('')}</select></label>
-      <label class="f"><span class="lbl">¿Quién sabe de esto?</span>
-        <input type="text" id="ppContacto" placeholder="Nombre y cargo"></label>
+      <label class="f"><span class="lbl">¿Quién lo atiende de la clínica?</span>
+        <input type="text" id="ppContacto" placeholder="Nombre y cargo" list="sug-atiende"></label>
     </div>
     <label class="f"><span class="lbl">¿Por qué vale la pena levantarlo?</span>
       <textarea id="ppNota" placeholder="Ej: Salió en la entrevista de admisiones. Nadie lo tiene documentado y se hace todos los días; genera reclamos de pacientes."></textarea></label>
+
+    <div class="caja-programar">
+      <span class="lbl">¿Ya saben cuándo pueden atender? (opcional)</span>
+      <span class="hint">Si no lo saben todavía, déjelo en blanco y se acuerda después.</span>
+      <div class="grid g3" style="gap:9px">
+        <label class="f" style="margin:0"><span class="lbl">Día</span>
+          <input type="date" id="ppFecha"></label>
+        <label class="f" style="margin:0"><span class="lbl">Desde</span>
+          <select id="ppInicio"><option value="">—</option>
+            ${HORAS.map(h => `<option>${h}</option>`).join('')}</select></label>
+        <label class="f" style="margin:0"><span class="lbl">Hasta</span>
+          <select id="ppFin"><option value="">—</option>
+            ${HORAS.map(h => `<option>${h}</option>`).join('')}</select></label>
+      </div>
+      <label class="f" style="margin:10px 0 0">
+        <span class="lbl">¿Se ve en varios días?</span>
+        <select id="ppDias">
+          <option value="1">Una sola visita</option>
+          <option value="2">2 días seguidos</option>
+          <option value="3">3 días seguidos</option>
+          <option value="5">Toda la semana (5 días)</option>
+          <option value="10">Dos semanas</option>
+        </select>
+        <span class="hint">Se agendan días hábiles seguidos con el mismo horario. Después se puede ajustar día por día.</span>
+      </label>
+    </div>
     <div class="flex"><button class="btn" data-cerrar>Cancelar</button>
       <button class="btn p right" id="ppOk">Proponer</button></div>`,
   box => {
@@ -3787,12 +3826,33 @@ function modalProponer() {
       const nombre = box.querySelector('#ppNombre').value.trim();
       if (!nombre) { toast('Ponle un nombre'); return; }
       try {
-        await api('/procesos', { method: 'POST', body: {
+        const atiende = box.querySelector('#ppContacto').value.trim();
+        const creado = await api('/procesos', { method: 'POST', body: {
           nombre,
           area: box.querySelector('#ppArea').value,
-          contacto: box.querySelector('#ppContacto').value.trim(),
+          contacto: atiende,
+          atiende,
           notasClinica: box.querySelector('#ppNota').value.trim()
         }});
+
+        const fecha = box.querySelector('#ppFecha').value;
+        if (fecha) {
+          const inicio = box.querySelector('#ppInicio').value;
+          const fin = box.querySelector('#ppFin').value;
+          const dias = parseInt(box.querySelector('#ppDias').value, 10) || 1;
+          const sesiones = [];
+          const d2 = new Date(fecha + 'T00:00:00');
+          let puestos = 0;
+          while (puestos < dias) {
+            if (![0, 6].includes(d2.getDay())) {
+              sesiones.push({ fecha: d2.toISOString().slice(0, 10), inicio, fin, atiende });
+              puestos++;
+            }
+            d2.setDate(d2.getDate() + 1);
+          }
+          await api('/procesos/' + creado.id + '/sesiones', { method: 'PUT', body: { sesiones } });
+        }
+
         const d = await api('/procesos');
         S.procesos = d.procesos;
         cerrarModal(); render();
@@ -4580,9 +4640,21 @@ function verLote(x) {
     ${c.siguiente_paso ? `<div class="aviso-ia ok"><b>Por dónde empezar:</b> ${esc(c.siguiente_paso)}</div>` : ''}
 
     <div class="flex" style="margin-top:18px">
+      ${x.id ? '<button class="btn p" id="haceDoc">📄 Convertir en documento</button>' : ''}
       <button class="btn" id="copiarLote">Copiar todo</button>
       <button class="btn right" data-cerrar>Cerrar</button>
     </div>`, box => {
+    const hd = box.querySelector('#haceDoc');
+    if (hd) hd.onclick = async () => {
+      hd.disabled = true; hd.textContent = 'Creando…';
+      try {
+        const r = await api('/documentos', { method: 'POST', body: { lote: x.id, titulo: x.titulo } });
+        cerrarModal();
+        S.vista = 'documentos'; irA('documentos'); render();
+        toast('Documento creado con ' + r.documento.fotos.length + ' foto(s)');
+      } catch (_) { toast('No se pudo crear'); hd.disabled = false; hd.textContent = '📄 Convertir en documento'; }
+    };
+
     box.querySelector('#copiarLote').onclick = async () => {
       try {
         await navigator.clipboard.writeText(JSON.stringify(c, null, 2));
@@ -4601,12 +4673,46 @@ function verLote(x) {
    contraparte los pueden poner tanto la coordinación como la clínica.
    ═══════════════════════════════════════════════════════════════ */
 function bloqueCita(p) {
-  const choques = chocaCon(p);
-  if (!choques.length) return '';
-  return `<div id="avisoChoque">${avisoChoque(p)}</div>`;
+  const puede = esAdmin() || esClinica() || (puedeEditar() && p.responsable === S.yo.id);
+  const ses = Array.isArray(p.sesiones) ? p.sesiones : [];
+
+  return `<div class="bloque-cita ${ses.length ? 'listo' : ''}">
+    <div class="flex" style="margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <span class="bc-et">Visitas acordadas</span>
+      <span class="tiny" id="sesEco"></span>
+      ${puede ? `<button class="btn sm right" id="sesAgregar">+ Agregar visita</button>
+        ${ses.length === 1 ? '<button class="btn sm" id="sesRepetir">Repetir varios días</button>' : ''}` : ''}
+    </div>
+
+    ${ses.length ? `<div class="sesiones">${ses.map((s, i) => `
+      <div class="sesion" data-i="${i}">
+        <input type="date" data-sf="${i}" value="${esc(s.fecha || '')}" ${puede ? '' : 'disabled'}>
+        <select data-si="${i}" ${puede ? '' : 'disabled'}>
+          <option value="">Desde</option>
+          ${HORAS.map(h => `<option value="${h}" ${s.inicio === h ? 'selected' : ''}>${h}</option>`).join('')}
+        </select>
+        <select data-sn="${i}" ${puede ? '' : 'disabled'}>
+          <option value="">Hasta</option>
+          ${HORAS.map(h => `<option value="${h}" ${s.fin === h ? 'selected' : ''}>${h}</option>`).join('')}
+        </select>
+        <input type="text" data-sa="${i}" value="${esc(s.atiende || '')}"
+          placeholder="¿Quién atiende?" list="sug-atiende" ${puede ? '' : 'disabled'}>
+        ${puede ? `<button class="btn quitar" data-sx="${i}" title="Quitar">✕</button>` : '<span></span>'}
+      </div>`).join('')}</div>`
+      : `<div class="mut">Todavía no hay visitas acordadas.
+          ${puede ? 'Agrega la primera con el botón de arriba.' : ''}</div>`}
+
+    <div class="tiny" style="margin-top:9px">
+      Si el levantamiento toma varios días, agrega una visita por cada uno: pueden
+      tener horas distintas y atenderlos personas distintas.
+    </div>
+    <div id="avisoChoque">${avisoChoque(p)}</div>
+  </div>`;
 }
 
 function conectarCita(p) {
+  conectarSesiones(p);
+
   const hora = document.getElementById('pHora');
   const atiende = document.getElementById('pAtiende');
   if (!hora && !atiende) return;
@@ -4785,4 +4891,483 @@ function avisoChoque(p) {
       </div>` : ''}
     </div>
   </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Documentos
+
+   El análisis convertido en algo que se revisa, se corrige, se aprueba
+   y se manda. El cliente ve una versión sin la parte técnica: lo que
+   describe su trabajo, no lo que vamos a construir con eso.
+   ═══════════════════════════════════════════════════════════════ */
+const ESTADOS_DOC = {
+  borrador:    { n: 'Borrador', c: 'pendiente', ayuda: 'Solo tú lo ves. Revísalo y corrige lo que haga falta.' },
+  revisado:    { n: 'Revisado', c: 'en_curso', ayuda: 'Ya lo revisaste. Falta mandárselo a la clínica.' },
+  con_cliente: { n: 'Con la clínica', c: 'en_revision', ayuda: 'La clínica lo está leyendo y puede comentar.' },
+  aprobado:    { n: 'Aprobado', c: 'aprobado', ayuda: 'La clínica dio su visto bueno.' }
+};
+
+async function vistaDocumentos(m) {
+  m.innerHTML = `<div class="topbar"><h1>Documentos</h1></div><div class="mut">Cargando…</div>`;
+
+  let docs = [];
+  try {
+    if (esAdmin()) {
+      docs = (await api('/documentos')).documentos;
+    } else {
+      // La clínica no tiene listado propio: ve los que le mandaron.
+      docs = [];
+    }
+  } catch (_) {}
+
+  if (esClinica()) return vistaDocumentosClinica(m);
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Documentos</h1><div class="sp"></div>
+    <span class="tiny">${docs.length} documento(s)</span></div>
+
+  <div class="banner">
+    Cada documento nace de un análisis en conjunto. Lo revisas, lo corriges, y cuando
+    esté listo se lo mandas a la clínica para que confirme que así es como trabajan.
+    <b>La parte técnica —módulos, automatizaciones— nunca sale de aquí.</b>
+  </div>
+
+  ${docs.length ? `<div class="docs">${docs.map(d => `
+    <div class="doc-card" data-doc="${d.id}">
+      <div class="flex" style="align-items:flex-start;gap:12px">
+        <div style="flex:1;min-width:0">
+          <b class="doc-nom">${esc(d.titulo)}</b>
+          <div class="tiny">${d.procesos.length} proceso(s) · ${d.fotos.length} foto(s) ·
+            ${esc(fechaLarga(d.creado))}</div>
+          <div class="tiny">${d.procesos.slice(0, 4).map(esc).join(' · ')}${
+            d.procesos.length > 4 ? ` +${d.procesos.length - 4}` : ''}</div>
+        </div>
+        <span class="pill ${ESTADOS_DOC[d.estado].c}">${ESTADOS_DOC[d.estado].n}</span>
+      </div>
+      <div class="tiny doc-ayuda">${ESTADOS_DOC[d.estado].ayuda}</div>
+      <div class="flex wrap" style="gap:9px;margin-top:12px">
+        <a class="btn sm" href="/doc/${d.id}" target="_blank" rel="noopener">Abrir</a>
+        <button class="btn sm" data-abrirdoc="${d.id}">Revisar y comentar</button>
+        ${d.comentarios ? `<span class="pill en_revision">${d.comentarios} comentario(s)</span>` : ''}
+      </div>
+    </div>`).join('')}</div>`
+    : `<div class="empty"><span class="e">📄</span>
+        Todavía no hay documentos.<br>
+        <span class="tiny">Se crean desde Revisión → Análisis en conjunto.</span></div>`}`;
+
+  m.querySelectorAll('[data-abrirdoc]').forEach(b => b.onclick = () => abrirDocumento(b.dataset.abrirdoc));
+}
+
+async function vistaDocumentosClinica(m) {
+  m.innerHTML = `<div class="topbar"><h1>Documentos para revisar</h1></div>
+    <div class="banner">
+      Aquí llegan los análisis de los procesos que ya se levantaron. Léalos y confirme
+      si así es como trabajan. Puede dejar comentarios sobre cualquier parte.
+    </div>
+    <div id="docsCli"><div class="mut">Buscando…</div></div>`;
+
+  // El listado de la clínica sale de los procesos: si alguno tiene documento
+  // enviado, aparece. Se consulta uno por uno porque son pocos.
+  const caja = document.getElementById('docsCli');
+  try {
+    const d = await api('/documentos-mios');
+    caja.innerHTML = d.documentos.length
+      ? `<div class="docs">${d.documentos.map(x => `
+          <div class="doc-card">
+            <div class="flex" style="align-items:flex-start">
+              <div style="flex:1"><b class="doc-nom">${esc(x.titulo)}</b>
+                <div class="tiny">${x.procesos.join(' · ')}</div></div>
+              <span class="pill ${ESTADOS_DOC[x.estado].c}">${ESTADOS_DOC[x.estado].n}</span>
+            </div>
+            <div class="flex wrap" style="gap:9px;margin-top:12px">
+              <a class="btn sm p" href="/doc/${x.id}" target="_blank" rel="noopener">Leer el documento</a>
+              <button class="btn sm" data-abrirdoc="${x.id}">Comentar</button>
+            </div>
+          </div>`).join('')}</div>`
+      : '<div class="empty"><span class="e">📄</span>Todavía no le han mandado ninguno.</div>';
+    caja.querySelectorAll('[data-abrirdoc]').forEach(b => b.onclick = () => abrirDocumento(b.dataset.abrirdoc));
+  } catch (_) { caja.innerHTML = '<div class="mut">No se pudo consultar.</div>'; }
+}
+
+/** El documento abierto para revisar: se lee, se comenta y se decide. */
+async function abrirDocumento(did) {
+  modal(`<h3>Cargando…</h3>`, async () => {});
+  let d;
+  try { d = await api('/documentos/' + did); }
+  catch (_) { cerrarModal(); toast('No se pudo abrir'); return; }
+
+  const doc = d.documento;
+  const c = doc.contenido || {};
+  const l = x => Array.isArray(x) ? x : [];
+  const soyCliente = esClinica();
+
+  const seccion = (clave, titulo, html) => html ? `<section class="doc-sec" data-ancla="${clave}">
+      <div class="ds-cab">
+        <h4>${titulo}</h4>
+        <button class="btn sm" data-comentar="${clave}" data-cita="${esc(titulo)}">💬 Comentar</button>
+      </div>
+      ${html}
+      <div class="ds-comentarios" data-coms="${clave}"></div>
+    </section>` : '';
+
+  cerrarModal();
+  modal(`<h3>${esc(doc.titulo)}</h3>
+    <div class="flex wrap" style="gap:10px;margin:-6px 0 16px">
+      <span class="pill ${ESTADOS_DOC[doc.estado].c}">${ESTADOS_DOC[doc.estado].n}</span>
+      <span class="tiny">${doc.procesos.length} procesos · ${(doc.fotos || []).length} fotos</span>
+      <a class="btn sm right" href="/doc/${did}" target="_blank" rel="noopener">Abrir para imprimir</a>
+    </div>
+
+    <div id="docCuerpo">
+      ${seccion('panorama', 'Panorama', c.panorama ? `<p>${esc(c.panorama)}</p>` : '')}
+
+      ${seccion('cadenas', 'Cómo se encadena el trabajo', l(c.cadenas).length
+        ? l(c.cadenas).map(x => `<div class="caja-doc"><b>${esc(x.nombre || '')}</b>
+            <div class="cadena-flujo">${l(x.procesos).map(p =>
+              `<span class="paso-cadena">${esc(p)}</span>`).join('<span class="fl">→</span>')}</div>
+            <div class="tiny">${esc(x.descripcion || '')}</div>
+            ${l(x.rupturas).length ? `<ul class="ia-lista">${l(x.rupturas).map(r =>
+              `<li>${esc(r)}</li>`).join('')}</ul>` : ''}</div>`).join('') : '')}
+
+      ${seccion('campos_formulario', 'Los formatos y sus campos', l(c.campos_formulario).length
+        ? l(c.campos_formulario).map(f => `<div class="caja-doc">
+            <b>${esc(f.formulario || '')}</b>
+            <div class="tiny">${esc(f.proceso || '')} · ${esc(f.soporte || '')}</div>
+            <div class="tw"><table class="t"><thead><tr>
+              <th>Campo</th><th>Tipo</th><th>Oblig.</th><th>Quién lo llena</th><th>De dónde sale</th>
+            </tr></thead><tbody>${l(f.campos).map(k => `<tr>
+              <td><b>${esc(k.nombre || '')}</b></td><td>${esc(k.tipo || '')}</td>
+              <td>${k.obligatorio ? 'Sí' : 'No'}</td>
+              <td>${esc(k.quien_lo_llena || '')}</td><td>${esc(k.de_donde_sale || '')}</td>
+            </tr>`).join('')}</tbody></table></div></div>`).join('') : '')}
+
+      ${seccion('duplicidades', 'Lo que se repite', l(c.duplicidades).length
+        ? `<ul class="ia-lista">${l(c.duplicidades).map(x => `<li><b>${esc(x.que_se_repite || '')}</b>
+            <div class="tiny">en: ${l(x.procesos).map(esc).join(' · ')}</div>
+            <div class="ia-obs">${esc(x.propuesta || '')}</div></li>`).join('')}</ul>` : '')}
+
+      ${!soyCliente ? seccion('modulos_sugeridos', 'Módulos propuestos <span class="solo-interno">solo interno</span>',
+        l(c.modulos_sugeridos).length
+        ? l(c.modulos_sugeridos).map(x => `<div class="modulo">
+            <b>${esc(x.modulo || '')}</b> <span class="et impacto-${esc(x.prioridad || '')}">${esc(x.prioridad || '')}</span>
+            <div class="tiny">${esc(x.por_que || '')}</div>
+            ${l(x.funciones).length ? `<ul class="ia-lista">${l(x.funciones).map(f =>
+              `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
+            ${l(x.datos_clave).length ? `<div class="chips-lote">${l(x.datos_clave).map(k =>
+              `<span class="chip dato">${esc(k)}</span>`).join('')}</div>` : ''}</div>`).join('') : '') : ''}
+
+      ${!soyCliente ? seccion('automatizacion', 'Cómo automatizarlo <span class="solo-interno">solo interno</span>',
+        l(c.automatizacion).length
+        ? l(c.automatizacion).map(x => `<div class="modulo auto">
+            <div class="flex" style="gap:9px;flex-wrap:wrap">
+              <b style="flex:1">${esc(x.que || '')}</b>
+              <span class="et tec-${esc((x.tecnologia || '').split(' ')[0])}">${esc(x.tecnologia || '')}</span>
+            </div>
+            <div style="margin:6px 0">${esc(x.como || '')}</div>
+            <div class="tiny">Se dispara con: ${esc(x.dispara || '—')} · Ahorra: ${esc(x.ahorro || '—')} ·
+              Esfuerzo: ${esc(x.esfuerzo || '—')}</div>
+            ${x.riesgo ? `<div class="ia-obs">Riesgo: ${esc(x.riesgo)}</div>` : ''}</div>`).join('') : '') : ''}
+
+      ${seccion('vacios', 'Qué falta levantar', l(c.vacios).length
+        ? `<ul class="ia-lista">${l(c.vacios).map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '')}
+
+      ${(doc.fotos || []).length ? seccion('fotos', 'Evidencia fotográfica',
+        `<div class="galeria-doc">${doc.fotos.map((f, i) => `
+          <figure><img src="/media/${f.mediaId}" loading="lazy" data-big="/media/${f.mediaId}">
+            <figcaption class="tiny">Foto ${i + 1} · ${esc(f.proceso)}<br>${esc(f.donde)}</figcaption>
+          </figure>`).join('')}</div>`) : ''}
+    </div>
+
+    <div class="doc-acciones">${accionesDoc(doc)}</div>`,
+  box => {
+    pintarComentarios(box, d.comentarios || []);
+
+    box.querySelectorAll('[data-big]').forEach(img => img.onclick = () => lightbox(img.dataset.big));
+
+    box.querySelectorAll('[data-comentar]').forEach(b => b.onclick = () =>
+      pedirComentario(did, b.dataset.comentar, b.dataset.cita, box));
+
+    box.querySelectorAll('[data-estado]').forEach(b => b.onclick = async () => {
+      const nuevo = b.dataset.estado;
+      if (nuevo === 'con_cliente' &&
+          !confirm('El documento quedará visible para la clínica, sin la parte técnica. ¿Mandarlo?')) return;
+      try {
+        await api('/documentos/' + did + '/estado', { method: 'POST', body: { estado: nuevo } });
+        cerrarModal();
+        render();
+        toast(nuevo === 'aprobado' ? 'Aprobado' : nuevo === 'con_cliente'
+          ? 'Enviado a la clínica' : 'Marcado como revisado');
+      } catch (_) { toast('No se pudo cambiar el estado'); }
+    });
+
+    box.querySelectorAll('[data-resolver]').forEach(b => b.onclick = async () => {
+      await api('/comentarios/' + b.dataset.resolver + '/resolver', { method: 'POST', body: {} });
+      const fresco = await api('/documentos/' + did);
+      pintarComentarios(box, fresco.comentarios || []);
+    });
+  });
+}
+
+function accionesDoc(doc) {
+  if (esClinica()) {
+    return doc.estado === 'con_cliente'
+      ? `<div class="aviso-ia">Si así es como trabajan, confírmelo. Si algo no coincide,
+           deje un comentario en la sección correspondiente antes de aprobar.</div>
+         <button class="btn p" data-estado="aprobado">✓ Sí, así es como trabajamos</button>`
+      : doc.estado === 'aprobado'
+        ? '<div class="aviso-ia ok">Ya dio su visto bueno a este documento.</div>' : '';
+  }
+  const pasos = {
+    borrador: ['revisado', '✓ Marcar como revisado', 'Cuando ya lo leíste y corregiste.'],
+    revisado: ['con_cliente', '→ Mandar a la clínica', 'Verán la versión sin la parte técnica.'],
+    con_cliente: [null, '', 'Esperando el visto bueno de la clínica.'],
+    aprobado: [null, '', 'La clínica ya lo aprobó.']
+  };
+  const [estado, texto, ayuda] = pasos[doc.estado] || [null, '', ''];
+  return `<div class="tiny" style="margin-bottom:10px">${esc(ayuda)}</div>
+    ${estado ? `<button class="btn p" data-estado="${estado}">${texto}</button>` : ''}
+    ${doc.estado === 'con_cliente' ? '<button class="btn" data-estado="revisado">Retirarlo</button>' : ''}`;
+}
+
+function pedirComentario(did, ancla, cita, box) {
+  const texto = prompt(`Comentario sobre «${cita}»:`);
+  if (!texto || !texto.trim()) return;
+  api('/documentos/' + did + '/comentarios', { method: 'POST', body: { ancla, cita, texto } })
+    .then(r => { pintarComentarios(box, r.comentarios); toast('Comentario guardado'); })
+    .catch(() => toast('No se pudo guardar'));
+}
+
+function pintarComentarios(box, coms) {
+  box.querySelectorAll('[data-coms]').forEach(caja => {
+    const mios = coms.filter(c => c.ancla === caja.dataset.coms);
+    caja.innerHTML = mios.map(c => `
+      <div class="com ${c.resuelto ? 'resuelto' : ''} ${c.esCliente ? 'cliente' : ''}">
+        <div class="com-cab">
+          <b>${esc(c.autor)}</b>
+          ${c.esCliente ? '<span class="et">la clínica</span>' : ''}
+          <span class="tiny">${esc(fechaLarga(c.creado))}</span>
+          ${!c.resuelto && esAdmin() ? `<button class="btn sm right" data-resolver="${c.id}">Marcar resuelto</button>` : ''}
+        </div>
+        <div>${esc(c.texto)}</div>
+        ${c.resuelto ? '<div class="tiny">✓ resuelto</div>' : ''}
+      </div>`).join('');
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   La agenda del día
+
+   Un calendario de verdad: las horas a la izquierda y los bloques
+   donde caen. Cada persona con su color, para ver de un golpe quién
+   está copado y dónde quedan huecos. Es lo primero que se mira al
+   empezar el día, así que va arriba de todo.
+   ═══════════════════════════════════════════════════════════════ */
+const HORA_INI = 6;
+const HORA_FIN = 20;
+const ALTO_HORA = 62;       // píxeles por hora
+
+/** Todas las visitas de un día: las de sesiones y las de fecha suelta. */
+function visitasDe(fecha, procesos) {
+  const salida = [];
+  (procesos || S.procesos).forEach(p => {
+    if (p.estado === 'aprobado') return;
+    const ses = Array.isArray(p.sesiones) ? p.sesiones : [];
+    if (ses.length) {
+      ses.filter(s => s.fecha === fecha).forEach(s => salida.push({
+        p, inicio: s.inicio || p.hora || '', fin: s.fin || '',
+        atiende: s.atiende || p.atiende || '', nota: s.nota || ''
+      }));
+    } else if ((p.fechaLimite || '').slice(0, 10) === fecha) {
+      salida.push({ p, inicio: p.hora || '', fin: '', atiende: p.atiende || '', nota: '' });
+    }
+  });
+  return salida.sort((a, b) => (a.inicio || '99:99').localeCompare(b.inicio || '99:99'));
+}
+
+function wAgendaDia() {
+  S.diaAgenda = S.diaAgenda || hoyISO();
+  const fecha = S.diaAgenda;
+  const visitas = visitasDe(fecha);
+  const esHoy = fecha === hoyISO();
+
+  // Una columna por persona con algo ese día; si no hay nadie, una sola.
+  const gente = columnasPersonas().filter(c => c.id &&
+    visitas.some(v => v.p.responsable === c.id));
+  const columnas = esAdmin() || esClinica()
+    ? (gente.length ? gente : [{ id: '__nadie__', nombre: 'Sin nadie asignado' }])
+    : [{ id: S.yo.id, nombre: 'Mis visitas' }];
+
+  const sinHora = visitas.filter(v => !v.inicio);
+
+  return `<div class="card widget agenda-dia">
+    <div class="ad-cab">
+      <h3 style="margin:0;flex:1">
+        ${esHoy ? 'Hoy' : esc(fechaDia(fecha))}
+        <span class="cuenta-urg">${visitas.length}</span>
+      </h3>
+      <button class="btn sm ic" data-dia="-1">←</button>
+      <input type="date" id="adFecha" value="${esc(fecha)}" class="ad-fecha">
+      <button class="btn sm ic" data-dia="1">→</button>
+      ${!esHoy ? '<button class="btn sm" data-dia="hoy">Hoy</button>' : ''}
+    </div>
+
+    ${visitas.length ? `
+      <div class="ad-rejilla" style="--cols:${columnas.length}">
+        <div class="ad-horas">
+          ${[...Array(HORA_FIN - HORA_INI)].map((_, i) => `
+            <div class="ad-hora" style="height:${ALTO_HORA}px">
+              <span>${String(HORA_INI + i).padStart(2, '0')}:00</span>
+            </div>`).join('')}
+        </div>
+
+        ${columnas.map(col => `
+          <div class="ad-col">
+            <div class="ad-col-cab" style="--tp:${colorPersona(col.id)}">
+              ${esc(col.nombre)}
+              <span class="tiny">${visitas.filter(v => (v.p.responsable || '__nadie__') === col.id).length}</span>
+            </div>
+            <div class="ad-pista" style="height:${(HORA_FIN - HORA_INI) * ALTO_HORA}px">
+              ${[...Array(HORA_FIN - HORA_INI)].map((_, i) =>
+                `<div class="ad-linea" style="top:${i * ALTO_HORA}px"></div>`).join('')}
+              ${esHoy ? lineaAhora() : ''}
+              ${visitas.filter(v => (v.p.responsable || '__nadie__') === col.id && v.inicio)
+                .map(v => bloqueVisita(v)).join('')}
+            </div>
+          </div>`).join('')}
+      </div>
+
+      ${sinHora.length ? `<div class="ad-sinhora">
+        <span class="lbl">Ese día pero sin hora puesta</span>
+        <div class="flex wrap" style="gap:8px">${sinHora.map(v =>
+          `<a class="chip" href="#/proceso/${v.p.id}" style="--tp:${colorPersona(v.p.responsable)}">
+            ${esc(v.p.nombre)} <span class="tiny">${esc(nombrePersona(v.p.responsable))}</span></a>`).join('')}</div>
+      </div>` : ''}
+    ` : `<div class="mut" style="padding:20px 0">
+        ${esHoy ? 'Hoy no hay ninguna visita programada.' : 'Ese día no hay nada agendado.'}
+      </div>`}
+  </div>`;
+}
+
+function bloqueVisita(v) {
+  const ini = enMinutos(v.inicio);
+  if (ini === null) return '';
+  const fin = enMinutos(v.fin) || (ini + DURACION_MIN);
+  const desde = Math.max(0, ini - HORA_INI * 60);
+  const alto = Math.max(34, ((fin - ini) / 60) * ALTO_HORA - 3);
+  const choques = chocaCon(v.p);
+
+  return `<a class="ad-bloque ${choques.length ? 'choca' : ''}" href="#/proceso/${v.p.id}"
+    style="top:${(desde / 60) * ALTO_HORA}px;height:${alto}px;--tp:${colorPersona(v.p.responsable)}"
+    title="${esc(v.p.nombre)} — ${esc(v.inicio)}${v.fin ? ' a ' + esc(v.fin) : ''}">
+    <b>${esc(v.inicio)}${v.fin ? '–' + esc(v.fin) : ''}</b>
+    <span class="adb-nom">${esc(v.p.nombre)}</span>
+    ${alto > 52 ? `<span class="adb-meta">${esc(v.atiende || 'sin contraparte')}</span>` : ''}
+  </a>`;
+}
+
+/** La raya de la hora actual: ubica de inmediato en qué punto va el día. */
+function lineaAhora() {
+  const ahora = new Date();
+  const min = ahora.getHours() * 60 + ahora.getMinutes() - HORA_INI * 60;
+  if (min < 0 || min > (HORA_FIN - HORA_INI) * 60) return '';
+  return `<div class="ad-ahora" style="top:${(min / 60) * ALTO_HORA}px"></div>`;
+}
+
+function conectarAgendaDia(m) {
+  m.querySelectorAll('[data-dia]').forEach(b => b.onclick = () => {
+    if (b.dataset.dia === 'hoy') S.diaAgenda = hoyISO();
+    else {
+      const d = new Date(S.diaAgenda + 'T00:00:00');
+      d.setDate(d.getDate() + Number(b.dataset.dia));
+      S.diaAgenda = d.toISOString().slice(0, 10);
+    }
+    esAdmin() ? tableroAdmin(m) : tableroPersonal(m);
+  });
+  const f = m.querySelector('#adFecha');
+  if (f) f.onchange = () => {
+    S.diaAgenda = f.value || hoyISO();
+    esAdmin() ? tableroAdmin(m) : tableroPersonal(m);
+  };
+}
+
+/** Las visitas se guardan enteras cada vez: son pocas y así no quedan
+    a medias si alguien cambia dos cosas seguidas. */
+function conectarSesiones(p) {
+  const caja = document.querySelector('.sesiones');
+  const agregar = document.getElementById('sesAgregar');
+  const repetir = document.getElementById('sesRepetir');
+  const eco = document.getElementById('sesEco');
+  if (!agregar && !caja) return;
+
+  const leer = () => {
+    if (!caja) return [];
+    return [...caja.querySelectorAll('.sesion')].map(fila => {
+      const i = fila.dataset.i;
+      const v = sel => (fila.querySelector(`[data-s${sel}="${i}"]`) || {}).value || '';
+      return { fecha: v('f'), inicio: v('i'), fin: v('n'), atiende: v('a') };
+    }).filter(s => s.fecha);
+  };
+
+  const guardar = sesiones => {
+    if (eco) eco.textContent = 'Guardando…';
+    api('/procesos/' + p.id + '/sesiones', { method: 'PUT', body: { sesiones } })
+      .then(r => {
+        p.sesiones = r.sesiones;
+        if (r.sesiones.length) {
+          p.fechaLimite = r.sesiones[0].fecha;
+          p.hora = r.sesiones[0].inicio || '';
+        }
+        const enLista = S.procesos.find(x => x.id === p.id);
+        if (enLista) Object.assign(enLista, {
+          sesiones: p.sesiones, fechaLimite: p.fechaLimite, hora: p.hora });
+        if (eco) { eco.textContent = 'Guardado ✓'; setTimeout(() => { eco.textContent = ''; }, 1600); }
+        vistaProceso(document.getElementById('main'));
+      })
+      .catch(() => { if (eco) eco.textContent = 'No se pudo guardar'; });
+  };
+
+  if (caja) {
+    caja.querySelectorAll('input, select').forEach(el => {
+      el.onchange = () => guardar(leer());
+    });
+    caja.querySelectorAll('[data-sx]').forEach(b => b.onclick = () => {
+      const s = leer();
+      s.splice(+b.dataset.sx, 1);
+      guardar(s);
+    });
+  }
+
+  if (agregar) agregar.onclick = () => {
+    const s = leer();
+    const ultima = s[s.length - 1];
+    // La visita nueva se propone para el día siguiente y con el mismo
+    // horario: es lo que pasa casi siempre cuando toma varios días.
+    let fecha = hoyISO();
+    if (ultima) {
+      const d = new Date(ultima.fecha + 'T00:00:00');
+      d.setDate(d.getDate() + 1);
+      fecha = d.toISOString().slice(0, 10);
+    }
+    s.push({ fecha, inicio: ultima ? ultima.inicio : '',
+             fin: ultima ? ultima.fin : '', atiende: ultima ? ultima.atiende : (p.atiende || '') });
+    guardar(s);
+  };
+
+  if (repetir) repetir.onclick = () => {
+    const base = leer()[0];
+    if (!base) return;
+    const dias = prompt('¿Cuántos días seguidos, con el mismo horario?', '5');
+    const n = Math.min(20, Math.max(1, parseInt(dias, 10) || 0));
+    if (!n) return;
+    const salida = [];
+    const d = new Date(base.fecha + 'T00:00:00');
+    let puestos = 0;
+    while (puestos < n) {
+      const iso = d.toISOString().slice(0, 10);
+      const finde = [0, 6].includes(d.getDay());
+      if (!finde) { salida.push(Object.assign({}, base, { fecha: iso })); puestos++; }
+      d.setDate(d.getDate() + 1);
+    }
+    guardar(salida);
+  };
 }
