@@ -505,17 +505,20 @@ function tableroPersonal(m) {
    avisando, y solo después los totales.
    ═══════════════════════════════════════════════════════════════ */
 const WIDGETS = [
-  { k: 'agenda',   n: 'Agenda del día' },
-  { k: 'progreso', n: 'Progreso del día' },
-  { k: 'hoy',      n: 'Lo de hoy' },
-  { k: 'manana',   n: 'Lo de mañana' },
-  { k: 'choques',  n: 'Choques de agenda' },
-  { k: 'avisos',   n: 'Avisos de la clínica' },
-  { k: 'vencidos', n: 'Pasados de fecha' },
-  { k: 'totales',  n: 'Totales del proyecto' },
-  { k: 'personas', n: 'Cada persona' },
-  { k: 'estados',  n: 'Por estado' },
-  { k: 'areas',    n: 'Por área' }
+  { k: 'general',   n: 'Progreso general' },
+  { k: 'progreso',  n: 'Progreso del día' },
+  { k: 'hoy',       n: 'Procesos de hoy' },
+  { k: 'manana',    n: 'Procesos de mañana' },
+  { k: 'avisos',    n: 'Notas y aclaraciones' },
+  { k: 'porasignar',n: 'Listos para asignar' },
+  { k: 'quincena',  n: 'Calendario de dos semanas' },
+  { k: 'agenda',    n: 'Agenda del día por horas' },
+  { k: 'choques',   n: 'Choques de agenda' },
+  { k: 'vencidos',  n: 'Pasados de fecha' },
+  { k: 'totales',   n: 'Totales del proyecto' },
+  { k: 'personas',  n: 'Cada persona' },
+  { k: 'estados',   n: 'Por estado' },
+  { k: 'areas',     n: 'Por área' }
 ];
 
 function prefsWidgets() {
@@ -538,17 +541,20 @@ function tableroAdmin(m) {
   const prefs = prefsWidgets();
 
   const piezas = {
-    agenda:   () => wAgendaDia(),
-    progreso: () => wProgresoDia(filtrados),
-    hoy:      () => wDia(filtrados, 'hoy', 'Hoy vienen a levantar', 'Hoy no hay ninguno programado.'),
-    manana:   () => wDia(filtrados, 'manana', 'Mañana', 'Mañana todavía no hay nada.'),
-    choques:  () => wChoques(),
-    avisos:   () => wAvisos(ps),
-    vencidos: () => wVencidos(filtrados),
-    totales:  () => wTotales(ps, filtrados),
-    personas: () => wPersonas(filtrados),
-    estados:  () => wEstados(filtrados),
-    areas:    () => wAreas(filtrados)
+    general:    () => wProgresoGeneral(ps),
+    progreso:   () => wProgresoDia(filtrados),
+    hoy:        () => wDiaPorPersona(filtrados, 'hoy', 'Procesos de hoy'),
+    manana:     () => wDiaPorPersona(filtrados, 'manana', 'Procesos de mañana'),
+    avisos:     () => wAvisos(ps),
+    porasignar: () => wPorAsignar(ps),
+    quincena:   () => wQuincena(),
+    agenda:     () => wAgendaDia(),
+    choques:    () => wChoques(),
+    vencidos:   () => wVencidos(filtrados),
+    totales:    () => wTotales(ps, filtrados),
+    personas:   () => wPersonas(filtrados),
+    estados:    () => wEstados(filtrados),
+    areas:      () => wAreas(filtrados)
   };
 
   m.innerHTML = `
@@ -590,6 +596,12 @@ function tableroAdmin(m) {
   document.getElementById('organizarW').onclick = () => modalWidgets(m);
   document.getElementById('nuevoTab').onclick = modalNuevoProceso;
   conectarAgendaDia(m);
+
+  m.querySelectorAll('[data-asignar]').forEach(sel => sel.onchange = async () => {
+    if (!sel.value) return;
+    await asignar(sel.dataset.asignar, sel.value);
+    tableroAdmin(m);
+  });
 
   m.querySelectorAll('[data-persona]').forEach(el => el.onclick = e => {
     if (e.target.closest('a')) return;
@@ -4681,7 +4693,7 @@ function bloqueCita(p) {
       <span class="bc-et">Visitas acordadas</span>
       <span class="tiny" id="sesEco"></span>
       ${puede ? `<button class="btn sm right" id="sesAgregar">+ Agregar visita</button>
-        ${ses.length === 1 ? '<button class="btn sm" id="sesRepetir">Repetir varios días</button>' : ''}` : ''}
+        <button class="btn sm" id="sesRepetir">⟳ Repetición</button>` : ''}
     </div>
 
     ${ses.length ? `<div class="sesiones">${ses.map((s, i) => `
@@ -5353,21 +5365,285 @@ function conectarSesiones(p) {
     guardar(s);
   };
 
-  if (repetir) repetir.onclick = () => {
-    const base = leer()[0];
-    if (!base) return;
-    const dias = prompt('¿Cuántos días seguidos, con el mismo horario?', '5');
-    const n = Math.min(20, Math.max(1, parseInt(dias, 10) || 0));
-    if (!n) return;
-    const salida = [];
-    const d = new Date(base.fecha + 'T00:00:00');
-    let puestos = 0;
-    while (puestos < n) {
-      const iso = d.toISOString().slice(0, 10);
-      const finde = [0, 6].includes(d.getDay());
-      if (!finde) { salida.push(Object.assign({}, base, { fecha: iso })); puestos++; }
-      d.setDate(d.getDate() + 1);
-    }
-    guardar(salida);
-  };
+  if (repetir) repetir.onclick = () => modalRepeticion(p, leer()[0], guardar);
+}
+
+/* ── Progreso general: todo lo que existe, con fecha o sin ella ── */
+function wProgresoGeneral(ps) {
+  const total = ps.length;
+  const av = total ? Math.round(ps.reduce((t, p) => t + avance(p), 0) / total) : 0;
+  const enviados = ps.filter(p => p.estado === 'en_revision' || p.estado === 'aprobado').length;
+  const aprobados = ps.filter(p => p.estado === 'aprobado').length;
+  const sinFecha = ps.filter(p => !p.fechaLimite && p.estado !== 'aprobado').length;
+  const pcCerrados = total ? Math.round(enviados / total * 100) : 0;
+
+  return `<div class="card widget progreso-gral">
+    <div class="flex" style="align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <h3 style="margin:0">Todo el levantamiento</h3>
+      <span class="tiny">${total} procesos${sinFecha ? ` · ${sinFecha} todavía sin fecha` : ''}</span>
+    </div>
+
+    <div class="pg-barra">
+      <div class="bar grande"><i style="width:${pcCerrados}%"></i></div>
+      <div class="pg-marcas">
+        <span><b>${enviados}</b> enviados</span>
+        <span><b>${aprobados}</b> aprobados</span>
+        <span><b>${total - enviados}</b> por levantar</span>
+      </div>
+    </div>
+
+    <div class="pg-detalle">
+      <div><b>${av}%</b><span class="tiny">de avance promedio en el contenido</span></div>
+      <div><b>${pcCerrados}%</b><span class="tiny">de los procesos ya entregados</span></div>
+    </div>
+  </div>`;
+}
+
+/* ── Lo del día, agrupado por quién lo hace ──────────────────── */
+function wDiaPorPersona(ps, cajon, titulo) {
+  const lista = ps.filter(p => grupoDe(p, 'fecha') === cajon);
+  const gente = columnasPersonas().filter(c =>
+    lista.some(p => (p.responsable || '') === c.id));
+
+  return `<div class="card widget dia-personas ${cajon}">
+    <h3>${titulo} <span class="cuenta-urg">${lista.length}</span></h3>
+    ${lista.length ? `<div class="dp-cols">
+      ${gente.map(col => {
+        const suyos = lista.filter(p => (p.responsable || '') === col.id)
+          .sort((a, b) => (a.hora || '99:99').localeCompare(b.hora || '99:99'));
+        return `<div class="dp-col" style="--tp:${colorPersona(col.id)}">
+          <div class="dp-nom">${esc(col.nombre)} <span class="tiny">${suyos.length}</span></div>
+          ${suyos.map(p => `<a class="dp-item" href="#/proceso/${p.id}">
+            <span class="dp-hora">${p.hora ? esc(p.hora) : '<i>—</i>'}</span>
+            <span class="dp-datos">
+              <b>${esc(p.nombre)}</b>
+              <span class="tiny">${esc(p.area || '')}${
+                p.atiende ? ' · ' + esc(p.atiende) : ' · <span class="falta-asig">sin contraparte</span>'}</span>
+            </span>
+            <span class="dp-av">${avance(p)}%</span>
+          </a>`).join('')}
+        </div>`;
+      }).join('')}
+    </div>` : `<div class="mut">${cajon === 'hoy'
+        ? 'Hoy no hay ninguno programado.' : 'Mañana todavía no hay nada.'}</div>`}
+  </div>`;
+}
+
+/* ── Lo que el cliente ya dejó listo y falta repartir ────────── */
+function wPorAsignar(ps) {
+  const listos = ps.filter(p => !p.responsable && p.estado !== 'aprobado' &&
+    (p.atiende || p.fechaLimite || p.hora));
+  const crudos = ps.filter(p => !p.responsable && p.estado !== 'aprobado' &&
+    !p.atiende && !p.fechaLimite && !p.hora);
+  if (!listos.length && !crudos.length) return '';
+
+  return `<div class="card widget por-asignar">
+    <h3>Listos para asignar <span class="cuenta-urg">${listos.length}</span></h3>
+    <p class="tiny">La clínica ya dijo quién atiende y cuándo. Solo falta decir quién los levanta.</p>
+
+    ${listos.length ? `<div class="pa-lista">${listos.map(p => `
+      <div class="pa-item">
+        <div class="pa-datos">
+          <a class="nombre-proc" href="#/proceso/${p.id}"><b>${esc(p.nombre)}</b></a>
+          <div class="tiny">${esc(p.area || 'Sin área')}
+            ${p.atiende ? ' · atiende <b>' + esc(p.atiende) + '</b>' : ''}
+            ${p.fechaLimite ? ' · ' + esc(fechaDia(p.fechaLimite)) : ''}
+            ${p.hora ? ' · ' + esc(p.hora) : ''}
+            ${(p.sesiones || []).length > 1 ? ` · ${p.sesiones.length} visitas` : ''}</div>
+        </div>
+        <select class="mini" data-asignar="${p.id}">
+          <option value="">Asignar a…</option>
+          ${S.equipo.filter(u => u.rol === 'admin' || u.rol === 'analista').map(u =>
+            `<option value="${u.id}">${esc(u.nombre)}</option>`).join('')}
+        </select>
+      </div>`).join('')}</div>` : '<div class="mut">Ninguno por ahora.</div>'}
+
+    ${crudos.length ? `<div class="tiny" style="margin-top:12px;padding-top:10px;
+      border-top:1px solid var(--line)">
+      Además hay ${crudos.length} sin responsable y sin fecha:
+      ${crudos.slice(0, 5).map(p => `<a href="#/proceso/${p.id}">${esc(p.nombre)}</a>`).join(' · ')}
+    </div>` : ''}
+  </div>`;
+}
+
+/* ── Dos semanas de un vistazo ──────────────────────────────── */
+function wQuincena() {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const lunes = new Date(hoy);
+  lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
+  const dias = [...Array(14)].map((_, i) => {
+    const d = new Date(lunes); d.setDate(lunes.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+
+  const mapeados = S.procesos.filter(p =>
+    (p.estado === 'en_revision' || p.estado === 'aprobado') &&
+    dias.includes((p.enviadoEn || '').slice(0, 10))).length;
+
+  return `<div class="card widget quincena">
+    <div class="flex" style="align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <h3 style="margin:0">Estas dos semanas</h3>
+      <span class="tiny">${mapeados} proceso(s) mapeados en este periodo</span>
+    </div>
+
+    <div class="qn-cab">${['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+      .map(d => `<div>${d}</div>`).join('')}</div>
+
+    <div class="qn-rejilla">
+      ${dias.map(f => {
+        const visitas = visitasDe(f);
+        const esHoy = f === hoyISO();
+        const pasado = f < hoyISO();
+        const d = new Date(f + 'T00:00:00');
+        const hechos = visitas.filter(v => v.p.estado === 'en_revision' || v.p.estado === 'aprobado').length;
+        return `<div class="qn-dia ${esHoy ? 'hoy' : ''} ${pasado ? 'pasado' : ''} ${[0, 6].includes(d.getDay()) ? 'finde' : ''}">
+          <div class="qn-num">${d.getDate()}
+            ${hechos ? `<span class="qn-ok" title="${hechos} ya entregados">✓${hechos}</span>` : ''}</div>
+          ${visitas.slice(0, 4).map(v => `
+            <a class="qn-ev" href="#/proceso/${v.p.id}" style="--tp:${colorPersona(v.p.responsable)}"
+               title="${esc(v.p.nombre)} — ${esc(nombrePersona(v.p.responsable))}${v.inicio ? ' · ' + esc(v.inicio) : ''}">
+              ${v.inicio ? `<b>${esc(v.inicio.slice(0, 5))}</b>` : ''}${esc(recortar(v.p.nombre, 14))}
+            </a>`).join('')}
+          ${visitas.length > 4 ? `<span class="tiny">+${visitas.length - 4}</span>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Repetición
+
+   "Todos los días de 6 a 9" o "lunes, miércoles y viernes a las 7" son
+   la forma normal de acordar un levantamiento largo. Se arma una vez y
+   después se ajusta el día suelto que cambie.
+   ═══════════════════════════════════════════════════════════════ */
+const DIAS_SEMANA = [
+  { k: 1, n: 'Lun' }, { k: 2, n: 'Mar' }, { k: 3, n: 'Mié' }, { k: 4, n: 'Jue' },
+  { k: 5, n: 'Vie' }, { k: 6, n: 'Sáb' }, { k: 0, n: 'Dom' }
+];
+
+function modalRepeticion(p, base, guardar) {
+  const hoy = hoyISO();
+  const desde = (base && base.fecha) || (p.fechaLimite || '').slice(0, 10) || hoy;
+  const inicio = (base && base.inicio) || p.hora || '';
+  const fin = (base && base.fin) || '';
+  const atiende = (base && base.atiende) || p.atiende || '';
+
+  modal(`<h3>Repetir la visita</h3>
+    <p class="mut" style="margin-top:-6px">Se crean las visitas de una vez. Después puede
+      cambiar el horario de un día suelto sin tocar los demás.</p>
+
+    <div class="grid g2">
+      <label class="f"><span class="lbl">Desde el día</span>
+        <input type="date" id="rDesde" value="${esc(desde)}"></label>
+      <label class="f"><span class="lbl">Hasta el día</span>
+        <input type="date" id="rHasta" value=""></label>
+    </div>
+
+    <label class="f"><span class="lbl">¿Qué días?</span>
+      <span class="hint">Marque los días de la semana en que van a atender.</span>
+      <div class="dias-sem" id="rDias">
+        ${DIAS_SEMANA.map(d => `<label class="dia-chip ${d.k >= 1 && d.k <= 6 ? 'on' : ''}">
+          <input type="checkbox" value="${d.k}" ${d.k >= 1 && d.k <= 6 ? 'checked' : ''}>
+          ${d.n}</label>`).join('')}
+      </div>
+      <div class="flex wrap" style="gap:7px;margin-top:9px">
+        <button class="btn sm" data-preset="habiles">Lunes a viernes</button>
+        <button class="btn sm" data-preset="lunsab">Lunes a sábado</button>
+        <button class="btn sm" data-preset="todos">Todos los días</button>
+      </div>
+    </label>
+
+    <div class="grid g3">
+      <label class="f"><span class="lbl">Desde</span>
+        <select id="rInicio"><option value="">—</option>
+          ${HORAS.map(h => `<option ${inicio === h ? 'selected' : ''}>${h}</option>`).join('')}</select></label>
+      <label class="f"><span class="lbl">Hasta</span>
+        <select id="rFin"><option value="">—</option>
+          ${HORAS.map(h => `<option ${fin === h ? 'selected' : ''}>${h}</option>`).join('')}</select></label>
+      <label class="f"><span class="lbl">¿Quién atiende?</span>
+        <input type="text" id="rAtiende" value="${esc(atiende)}" list="sug-atiende"></label>
+    </div>
+
+    <div class="aviso-ia" id="rPrevio">Elija las fechas para ver cuántas visitas quedan.</div>
+
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" data-cerrar>Cancelar</button>
+      <button class="btn p right" id="rOk">Crear las visitas</button>
+    </div>`, box => {
+
+    const calcular = () => {
+      const d1 = box.querySelector('#rDesde').value;
+      const d2 = box.querySelector('#rHasta').value;
+      const dias = [...box.querySelectorAll('#rDias input:checked')].map(x => Number(x.value));
+      if (!d1 || !d2 || d2 < d1 || !dias.length) return [];
+
+      const salida = [];
+      const cursor = new Date(d1 + 'T00:00:00');
+      const tope = new Date(d2 + 'T00:00:00');
+      while (cursor <= tope && salida.length < 60) {
+        if (dias.includes(cursor.getDay())) {
+          salida.push({
+            fecha: cursor.toISOString().slice(0, 10),
+            inicio: box.querySelector('#rInicio').value,
+            fin: box.querySelector('#rFin').value,
+            atiende: box.querySelector('#rAtiende').value.trim()
+          });
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return salida;
+    };
+
+    const previo = () => {
+      const s = calcular();
+      const caja = box.querySelector('#rPrevio');
+      if (!s.length) {
+        caja.className = 'aviso-ia';
+        caja.textContent = 'Elija el día final y al menos un día de la semana.';
+        return;
+      }
+      const horario = s[0].inicio
+        ? `de ${s[0].inicio}${s[0].fin ? ' a ' + s[0].fin : ''}`
+        : 'sin hora definida';
+      caja.className = 'aviso-ia ok';
+      caja.innerHTML = `<b>${s.length} visita(s)</b> ${horario}.<br>
+        <span class="tiny">Desde ${esc(fechaDia(s[0].fecha))} hasta ${esc(fechaDia(s[s.length - 1].fecha))}.
+        ${s.length > 12 ? 'Son bastantes: confirme que el acuerdo es ese.' : ''}</span>`;
+    };
+
+    box.querySelectorAll('input, select').forEach(el => {
+      el.onchange = el.oninput = () => {
+        const chip = el.closest('.dia-chip');
+        if (chip) chip.classList.toggle('on', el.checked);
+        previo();
+      };
+    });
+
+    box.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => {
+      const mapa = { habiles: [1, 2, 3, 4, 5], lunsab: [1, 2, 3, 4, 5, 6], todos: [0, 1, 2, 3, 4, 5, 6] };
+      const activos = mapa[b.dataset.preset];
+      box.querySelectorAll('#rDias input').forEach(cb => {
+        cb.checked = activos.includes(Number(cb.value));
+        cb.closest('.dia-chip').classList.toggle('on', cb.checked);
+      });
+      previo();
+    });
+
+    box.querySelector('#rOk').onclick = () => {
+      const s = calcular();
+      if (!s.length) { toast('Faltan las fechas o los días'); return; }
+      if (s.length > 20 && !confirm(`Se van a crear ${s.length} visitas. ¿Seguro?`)) return;
+      guardar(s);
+      cerrarModal();
+      toast(`${s.length} visitas creadas`);
+    };
+
+    // Por defecto, una semana desde el día de inicio.
+    const d = new Date(desde + 'T00:00:00');
+    d.setDate(d.getDate() + 6);
+    box.querySelector('#rHasta').value = d.toISOString().slice(0, 10);
+    previo();
+  });
 }
