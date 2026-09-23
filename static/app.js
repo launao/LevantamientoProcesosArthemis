@@ -1112,7 +1112,7 @@ function vistaProceso(m) {
     <span class="tiny" id="estadoGuardado"></span>
     ${ro ? '' : '<button class="btn sm" id="btnGuardar" title="Guardar ahora (Ctrl+S)">Guardar</button>'}
     ${esAdmin() ? '<button class="btn sm" id="btnIA" title="Que Claude analice este levantamiento">✨ Análisis</button>' : ''}
-    ${p.informeUrl ? '<button class="btn sm" id="btnInforme" title="Ver y compartir el informe enviado">📄 Informe</button>' : ''}
+    <button class="btn sm" id="btnInforme" title="Ver, compartir o descargar el informe">📄 Informe</button>
     ${ro ? '' : '<button class="btn sm" id="btnHist" title="Ver y recuperar versiones anteriores">🕘 Historial</button>'}
     ${ro ? '' : '<button class="btn sm" id="btnQR">📱 Celular</button>'}
     ${ro ? '' : `<button class="btn sm p" id="btnEnviar">${p.enviosTotal ? '↻ Reenviar' : '✈ Enviar'}</button>`}
@@ -3882,8 +3882,18 @@ function modalProponer() {
    el mismo y se puede recuperar aquí cuantas veces haga falta.
    ═══════════════════════════════════════════════════════════════ */
 async function modalInforme(p) {
-  const url = p.informeUrl;
-  if (!url) { toast('Este proceso todavía no se ha enviado'); return; }
+  let url = p.informeUrl;
+  if (!url) {
+    // Se puede necesitar el informe antes de enviarlo formalmente: para
+    // llevarlo a una reunión o revisarlo impreso.
+    try {
+      const r = await api('/procesos/' + p.id + '/compartir-enlace', { method: 'POST' });
+      url = r.url;
+      p.informeUrl = url;
+      const enLista = S.procesos.find(x => x.id === p.id);
+      if (enLista) enLista.informeUrl = url;
+    } catch (_) { toast('No se pudo preparar el informe'); return; }
+  }
 
   const texto = `*${p.nombre}*\n${[p.codigo, p.area].filter(Boolean).join(' · ')}\n\n` +
     `Puedes ver el informe completo, con las fotos y escuchar los audios, aquí:\n${url}`;
@@ -3899,8 +3909,13 @@ async function modalInforme(p) {
 
     <div class="flex wrap" style="gap:8px;margin:14px 0">
       <a class="btn p" href="${esc(url)}" target="_blank" rel="noopener">📄 Abrir informe</a>
+      <a class="btn" href="${esc(url)}/descargar">⤓ Descargar con las fotos</a>
       <a class="btn" href="${wa}" target="_blank" rel="noopener">📲 WhatsApp</a>
       <a class="btn" href="${correo}">✉ Correo</a>
+    </div>
+    <div class="tiny" style="margin-bottom:8px">
+      La descarga es un archivo que lleva las fotos y los audios dentro: se puede guardar,
+      mandar por correo o imprimir a PDF, y sigue funcionando sin conexión.
     </div>
 
     <span class="lbl">Enlace</span>
@@ -4387,7 +4402,8 @@ function tarjetaRevision(p) {
       ${esc(p.notaRevision)}</div>` : ''}
 
     <div class="rev-acciones">
-      ${p.informeUrl ? `<a class="btn" href="${esc(p.informeUrl)}" target="_blank" rel="noopener">📄 Leer informe</a>` : ''}
+      ${p.informeUrl ? `<a class="btn" href="${esc(p.informeUrl)}" target="_blank" rel="noopener">📄 Leer informe</a>
+        <a class="btn" href="${esc(p.informeUrl)}/descargar">⤓ Descargar</a>` : ''}
       <button class="btn" data-abrirproc="${p.id}">Abrir el levantamiento</button>
       <button class="btn" data-ia="${p.id}">✨ Análisis</button>
       ${esperando ? `
@@ -4959,6 +4975,7 @@ async function vistaDocumentos(m) {
       <div class="tiny doc-ayuda">${ESTADOS_DOC[d.estado].ayuda}</div>
       <div class="flex wrap" style="gap:9px;margin-top:12px">
         <a class="btn sm" href="/doc/${d.id}" target="_blank" rel="noopener">Abrir</a>
+        <a class="btn sm" href="/doc/${d.id}/descargar">⤓ Descargar</a>
         <button class="btn sm" data-abrirdoc="${d.id}">Revisar y comentar</button>
         ${d.comentarios ? `<span class="pill en_revision">${d.comentarios} comentario(s)</span>` : ''}
       </div>
@@ -4993,6 +5010,7 @@ async function vistaDocumentosClinica(m) {
             </div>
             <div class="flex wrap" style="gap:9px;margin-top:12px">
               <a class="btn sm p" href="/doc/${x.id}" target="_blank" rel="noopener">Leer el documento</a>
+              <a class="btn sm" href="/doc/${x.id}/descargar">⤓ Descargar</a>
               <button class="btn sm" data-abrirdoc="${x.id}">Comentar</button>
             </div>
           </div>`).join('')}</div>`
@@ -5028,6 +5046,7 @@ async function abrirDocumento(did) {
       <span class="pill ${ESTADOS_DOC[doc.estado].c}">${ESTADOS_DOC[doc.estado].n}</span>
       <span class="tiny">${doc.procesos.length} procesos · ${(doc.fotos || []).length} fotos</span>
       <a class="btn sm right" href="/doc/${did}" target="_blank" rel="noopener">Abrir para imprimir</a>
+      <a class="btn sm" href="/doc/${did}/descargar">⤓ Descargar</a>
     </div>
 
     <div id="docCuerpo">

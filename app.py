@@ -7,7 +7,7 @@ Railway:    gunicorn app:app   (ver Procfile)
 import os
 from datetime import timedelta
 
-from flask import Flask, render_template, redirect, url_for, jsonify
+from flask import Flask, render_template, redirect, url_for, jsonify, Response
 
 try:  # .env solo en desarrollo
     from dotenv import load_dotenv
@@ -92,6 +92,51 @@ def crear_app():
         resp.headers["Service-Worker-Allowed"] = "/"
         resp.headers["Cache-Control"] = "no-cache"
         return resp
+
+    @app.get("/r/<token>/descargar")
+    def descargar_informe(token):
+        """El informe como un archivo que se guarda y sigue funcionando.
+
+        Las fotos van dentro del archivo, y los audios también mientras
+        quepan. Así el informe se puede mandar por correo o guardar en una
+        carpeta sin depender de que el servidor siga en pie.
+        """
+        datos = datos_informe(token, embebido=True)
+        if not datos:
+            return render_template("informe.html", datos=None), 410
+
+        html = render_template("informe.html", datos=datos)
+        nombre = "".join(ch if ch.isalnum() or ch in " -_" else ""
+                         for ch in (datos["proceso"]["nombre"] or "informe"))[:60].strip()
+        return Response(html, mimetype="text/html; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="{nombre or "informe"}.html"'})
+
+    @app.get("/doc/<did>/descargar")
+    def descargar_documento(did):
+        from auth import usuario_actual as quien
+        u = quien()
+        if not u:
+            return redirect(url_for("login_view"))
+
+        para_cliente = u["rol"] != "admin"
+        res = documento_html(did, para_cliente=para_cliente)
+        if not res:
+            return render_template("documento.html", doc=None, cuerpo="",
+                                   organizacion="", para_cliente=False), 404
+        doc, cuerpo = res
+        if u["rol"] == "clinica" and doc["estado"] not in ("con_cliente", "aprobado"):
+            return render_template("documento.html", doc=None, cuerpo="",
+                                   organizacion="", para_cliente=True), 403
+
+        import db as D
+        cfg = D.jload(D.row("SELECT data FROM config WHERE id=1")["data"], {})
+        html = render_template("documento.html", doc=doc, cuerpo=cuerpo,
+                               organizacion=cfg.get("organizacion", ""),
+                               para_cliente=para_cliente)
+        nombre = "".join(ch if ch.isalnum() or ch in " -_" else ""
+                         for ch in (doc["titulo"] or "analisis"))[:60].strip()
+        return Response(html, mimetype="text/html; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="{nombre or "analisis"}.html"'})
 
     @app.get("/doc/<did>")
     def documento(did):

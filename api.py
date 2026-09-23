@@ -1152,6 +1152,25 @@ def guardar_sesiones(pid):
     return jsonify({"ok": True, "sesiones": limpias})
 
 
+@api.post("/procesos/<pid>/compartir-enlace")
+@login_required
+def asegurar_enlace(pid):
+    """Devuelve el enlace del informe, creándolo si todavía no existe.
+
+    Sirve para poder descargar el informe de un proceso que aún no se ha
+    enviado formalmente: a veces hace falta llevárselo a una reunión antes.
+    """
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] not in ("admin", "clinica") and not _mio(p, u):
+        return jsonify({"error": "sin_permiso"}), 403
+
+    token = _asegurar_share(pid, u["id"])
+    return jsonify({"ok": True, "url": _url_informe(token), "token": token})
+
+
 @api.get("/indice")
 @login_required
 def indice_procesos():
@@ -1750,7 +1769,37 @@ def revocar_share(pid):
 
 # ── Informe público (el enlace que se manda por WhatsApp o correo) ──────────
 
-def datos_informe(token):
+def _datauri(mid, reducir=True, tope=None):
+    """Un archivo como texto embebible. Devuelve None si no cabe."""
+    m = D.row("SELECT content_type, data, ruta, tamano FROM media WHERE id=?", (mid,))
+    if not m:
+        return None
+    if m.get("ruta"):
+        try:
+            with open(m["ruta"], "rb") as fh:
+                datos = fh.read()
+        except OSError:
+            return None
+    else:
+        datos = D.to_bytes(m["data"])
+    if not datos:
+        return None
+
+    ctype = m["content_type"] or "application/octet-stream"
+    if reducir and ctype.startswith("image/"):
+        datos, ctype = ia.reducir_imagen(datos, ctype)
+    if tope and len(datos) > tope:
+        return None
+    return f"data:{ctype};base64," + base64.b64encode(datos).decode("ascii")
+
+
+# Cuánto audio se permite incrustar en un archivo que alguien va a guardar
+# o mandar por correo. Pasado eso, el informe pesa más de lo que aguanta
+# un adjunto y es mejor que esos audios se oigan en línea.
+TOPE_AUDIO_TOTAL = 12 * 1024 * 1024
+
+
+def datos_informe(token, embebido=False):
     t = D.row("SELECT * FROM share_tokens WHERE token=? AND activo", (token,))
     if not t:
         return None
@@ -1805,8 +1854,27 @@ def datos_informe(token):
     envios = D.rows("SELECT * FROM envios WHERE proceso_id=? ORDER BY numero DESC LIMIT 1",
                     (t["proceso_id"],))
 
+    medios = {}
+    if embebido:
+        gastado = 0
+        for e in evs:
+            if not e["media_id"] or e["media_id"] in medios:
+                continue
+            if e["tipo"] == "foto":
+                uri = _datauri(e["media_id"])
+                if uri:
+                    medios[e["media_id"]] = uri
+            elif e["tipo"] == "audio" and gastado < TOPE_AUDIO_TOTAL:
+                uri = _datauri(e["media_id"], reducir=False,
+                               tope=TOPE_AUDIO_TOTAL - gastado)
+                if uri:
+                    medios[e["media_id"]] = uri
+                    gastado += len(uri) * 3 // 4
+
     return {
         "token": token,
+        "embebido": embebido,
+        "media": medios,
         "proceso": {
             "nombre": p["nombre"], "codigo": p["codigo"], "area": p["area"],
             "estado": p["estado"], "responsable": nombres.get(p["responsable_id"], "—"),

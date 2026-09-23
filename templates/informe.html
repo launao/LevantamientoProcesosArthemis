@@ -80,6 +80,11 @@
 </style>
 </head>
 <body>
+{% macro medio(id) -%}
+{%- if datos.media and datos.media.get(id) -%}{{ datos.media[id] }}
+{%- else -%}/r/{{ datos.token }}/media/{{ id }}{%- endif -%}
+{%- endmacro %}
+
 {% if not datos %}
   <div class="inf"><div class="empty" style="padding-top:110px">
     <span class="e">⚠</span>Este informe ya no está disponible.<br>
@@ -170,7 +175,7 @@
                 </div>
                 {% for e in lista %}
                   {% if e.tipo == 'foto' %}
-                    <figure class="foto" style="margin:0 0 8px"><img src="/r/{{ datos.token }}/media/{{ e.mediaId }}" loading="lazy">
+                    <figure class="foto" style="margin:0 0 8px"><img src="{{ medio(e.mediaId) }}" loading="lazy">
                       <figcaption class="pie">{% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}</figcaption></figure>
                   {% elif e.tipo == 'nota' %}
                     <div class="audio" style="background:var(--surface);margin-bottom:8px">
@@ -179,7 +184,7 @@
                   {% else %}
                     <div class="audio" style="margin-bottom:8px"><div class="t">🎙 Nota de voz
                       {% if e.duracion %}<span class="tiny">{{ (e.duracion // 60) }}:{{ '%02d' % (e.duracion % 60) }}</span>{% endif %}</div>
-                      <audio controls preload="none" src="/r/{{ datos.token }}/media/{{ e.mediaId }}"></audio></div>
+                      <audio controls preload="none" src="{{ medio(e.mediaId) }}"></audio></div>
                   {% endif %}
                 {% endfor %}
               </div>
@@ -192,7 +197,7 @@
             {% for e in c.evidencias %}
               {% if e.tipo == 'foto' %}
                 <figure class="foto" style="margin:0">
-                  <img src="/r/{{ datos.token }}/media/{{ e.mediaId }}" alt="Evidencia fotográfica" loading="lazy">
+                  <img src="{{ medio(e.mediaId) }}" alt="Evidencia fotográfica" loading="lazy">
                   <figcaption class="pie">
                     {% if e.nota %}{{ e.nota }} · {% endif %}
                     {{ e.autor }} · {{ e.fecha }}{% if e.origen == 'celular' %} · 📱{% endif %}
@@ -209,7 +214,7 @@
                   <div class="t">🎙 Nota de voz
                     {% if e.duracion %}<span class="tiny">{{ (e.duracion // 60) }}:{{ '%02d' % (e.duracion % 60) }}</span>{% endif %}
                   </div>
-                  <audio controls preload="none" src="/r/{{ datos.token }}/media/{{ e.mediaId }}"></audio>
+                  <audio controls preload="none" src="{{ medio(e.mediaId) }}"></audio>
                   <span class="marca">
                     {% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}
                   </span>
@@ -230,7 +235,7 @@
           {% for e in datos.sueltas %}
             {% if e.tipo == 'foto' %}
               <figure class="foto" style="margin:0">
-                <img src="/r/{{ datos.token }}/media/{{ e.mediaId }}" alt="Evidencia" loading="lazy">
+                <img src="{{ medio(e.mediaId) }}" alt="Evidencia" loading="lazy">
                 <figcaption class="pie">{% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}</figcaption>
               </figure>
             {% elif e.tipo == 'nota' %}
@@ -243,7 +248,7 @@
               <div class="audio">
                 <div class="t">🎙 Nota de voz
                   {% if e.duracion %}<span class="tiny">{{ (e.duracion // 60) }}:{{ '%02d' % (e.duracion % 60) }}</span>{% endif %}</div>
-                <audio controls preload="none" src="/r/{{ datos.token }}/media/{{ e.mediaId }}"></audio>
+                <audio controls preload="none" src="{{ medio(e.mediaId) }}"></audio>
                 <span class="marca">{% if e.nota %}{{ e.nota }} · {% endif %}{{ e.autor }} · {{ e.fecha }}</span>
               </div>
             {% endif %}
