@@ -218,6 +218,12 @@ Quien lee esto coordina una clínica, no compra metodologías.
 paciente" sirve; "implementar una solución de gestión documental" no sirve.
 - Si el levantamiento está muy incompleto, dilo con franqueza en 'calidad' en vez de \
 producir un análisis bonito sobre nada.
+- El 'flujo' debe poder dibujarse: cada nodo un paso real, cada flecha una transición \
+que alguien mencionó. Usa 'decision' donde el caso se bifurca ("si trae autorización...") \
+y pon la condición en las flechas que salen de ahí. Entre 5 y 20 nodos: si te quedan \
+más, estás describiendo clics en vez de pasos.
+- En 'campos_formulario', 'hoy_se_guarda' es la pregunta que importa: un dato que se \
+escribe en un papel que después se archiva no está guardado en ninguna parte útil.
 - Las fotos son parte del levantamiento, no decoración: léelas. Un formato en papel \
 fotografiado dice qué campos se llenan a mano, y eso casi nunca está escrito.
 - No puedes escuchar las notas de voz. Nunca supongas qué dicen. Si un punto queda \
@@ -236,6 +242,19 @@ marcas de código. Esta es la forma exacta:
     {"n": 1, "actividad": "...", "responsable": "...", "sistema": "...",
      "observacion": "qué se aclaró o corrigió frente a lo que quedó escrito"}
   ],
+  "flujo": {
+    "actores": ["quién participa, en el orden en que entra al proceso"],
+    "nodos": [
+      {"id": "n1", "tipo": "inicio | tarea | decision | documento | espera | fin",
+       "texto": "qué pasa, en pocas palabras",
+       "actor": "uno de los actores",
+       "sistema": "dónde se hace: nombre del sistema, papel, teléfono, o vacío",
+       "tiempo": "cuánto toma, si se sabe"}
+    ],
+    "flechas": [
+      {"de": "n1", "a": "n2", "condicion": "solo en decisiones: 'sí', 'no', 'si está autorizado'"}
+    ]
+  },
   "dolores": [
     {"dolor": "...", "impacto": "a qué afecta: tiempo, glosas, paciente, reprocesos"}
   ],
@@ -247,6 +266,16 @@ marcas de código. Esta es la forma exacta:
     {"propuesta": "...", "que_haria_el_sistema": "...", "requisito": "qué hace falta para poder hacerlo"}
   ],
   "riesgos": ["..."],
+  "campos_formulario": [
+    {"formulario": "cómo lo llaman ellos: 'hoja de admisión', 'la planilla'",
+     "soporte": "papel | pantalla del sistema | cuaderno | Excel | ninguno",
+     "campos": [
+       {"nombre": "el rótulo tal como aparece", "tipo": "texto | número | fecha | selección | firma | checkbox",
+        "obligatorio": true, "quien_lo_llena": "cargo",
+        "de_donde_sale": "lo trae el paciente | lo calcula el sistema | lo escribe quien atiende",
+        "hoy_se_guarda": "sí, en el sistema | sí, en papel | no se guarda"}
+     ]}
+  ],
   "hallazgos_en_fotos": [
     {"foto": 1, "observacion": "qué se ve ahí que no estaba escrito, o que lo contradice"}
   ],
@@ -478,6 +507,9 @@ hipótesis con confianza baja, no como hecho.
 - Las fotos son evidencia de primera mano: un formato en papel fotografiado te dice \
 exactamente qué campos necesita una pantalla. Léelas con atención y sé específico: \
 nombra los campos que ves.
+- El 'flujo' es el recorrido completo del caso atravesando los procesos que te di, no \
+el detalle interno de cada uno. Cada nodo debe ser un paso reconocible por quien \
+trabaja ahí.
 - Busca lo que se repite. Si tres procesos piden los mismos datos del paciente, eso \
 es una sola funcionalidad, no tres.
 - Distingue el proceso de la herramienta. "Lo llevan en Excel" no es un proceso, es \
@@ -495,6 +527,19 @@ Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor ni marcas 
 
 {
   "panorama": "6 a 10 líneas sobre qué muestran estos procesos vistos juntos",
+  "flujo": {
+    "actores": ["quién participa, en el orden en que entra al proceso"],
+    "nodos": [
+      {"id": "n1", "tipo": "inicio | tarea | decision | documento | espera | fin",
+       "texto": "qué pasa, en pocas palabras",
+       "actor": "uno de los actores",
+       "sistema": "dónde se hace: nombre del sistema, papel, teléfono, o vacío",
+       "tiempo": "cuánto toma, si se sabe"}
+    ],
+    "flechas": [
+      {"de": "n1", "a": "n2", "condicion": "solo en decisiones: 'sí', 'no', 'si está autorizado'"}
+    ]
+  },
   "cadenas": [
     {"nombre": "cómo llamarías a esta cadena de trabajo",
      "procesos": ["nombres exactos, en el orden en que ocurren"],

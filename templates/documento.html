@@ -40,6 +40,8 @@
     padding:9px 10px;border-bottom:2px solid var(--linea)}
   td{padding:10px;border-bottom:1px solid var(--linea);vertical-align:top}
   .destacado{background:#FDF8E8;border:1.5px solid var(--oro);border-radius:10px;padding:16px 20px;font-size:16.5px}
+  .flujo .lienzo-flujo{overflow-x:auto;border:1.5px solid var(--linea);border-radius:10px;padding:8px}
+  .flujo svg{display:block;height:auto;max-width:100%}
   .fotos figure{margin:0 0 26px;border:1.5px solid var(--linea);border-radius:10px;overflow:hidden}
   .fotos img{display:block;width:100%}
   .fotos figcaption{padding:11px 14px;background:#F6F7F4;font-size:13px;color:var(--ink2)}
@@ -49,7 +51,10 @@
     .hoja{max-width:none}
     header.tapa{background:#fff}
     section{page-break-inside:avoid}
-    .fotos figure{page-break-inside:avoid}
+    .flujo svg{max-width:100%}
+    .flujo .lienzo-flujo{overflow-x:auto;border:1.5px solid var(--linea);border-radius:10px;padding:8px}
+  .flujo svg{display:block;height:auto;max-width:100%}
+  .fotos figure{page-break-inside:avoid}
   }
   @media (max-width:700px){
     header.tapa,main,footer{padding-left:20px;padding-right:20px}

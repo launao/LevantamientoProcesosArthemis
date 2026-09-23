@@ -17,6 +17,7 @@ from flask import Blueprint, jsonify, request, send_file, Response
 
 import db as D
 import documentos as Doc
+import flujo as F
 import ia
 from sanitizar import limpiar_respuestas, a_texto_plano, limpiar_html
 from auth import (usuario_actual, iniciar_sesion, cerrar_sesion, login_required,
@@ -1004,18 +1005,25 @@ def documento_html(did, para_cliente=False, publico=False):
                 + ("<ul>" + lista(x.get("rupturas"), lambda r: f"<li>{esc2(r)}</li>") + "</ul>"
                    if x.get("rupturas") else "") + "</div>")) + "</section>")
 
+    dibujo = F.svg(c.get("flujo"))
+    if dibujo:
+        partes.append("<section class='flujo'><h2>El flujo, paso a paso</h2>"
+                      "<div class='lienzo-flujo'>" + dibujo + "</div></section>")
+
     if c.get("campos_formulario"):
         partes.append("<section><h2>Los formatos y sus campos</h2>" + lista(
             c["campos_formulario"], lambda f: (
                 f"<div class='caja'><h3>{esc2(f.get('formulario'))}</h3>"
                 f"<p class='meta'>{esc2(f.get('proceso'))} · {esc2(f.get('soporte'))}</p>"
-                "<table><thead><tr><th>Campo</th><th>Tipo</th><th>Obligatorio</th>"
-                "<th>Quién lo llena</th><th>De dónde sale</th></tr></thead><tbody>"
+                "<table><thead><tr><th>Campo</th><th>Tipo</th><th>Oblig.</th>"
+                "<th>Quién lo llena</th><th>De dónde sale</th><th>¿Se guarda hoy?</th>"
+                "</tr></thead><tbody>"
                 + lista(f.get("campos"), lambda k: (
                     f"<tr><td><b>{esc2(k.get('nombre'))}</b></td><td>{esc2(k.get('tipo'))}</td>"
                     f"<td>{'Sí' if k.get('obligatorio') else 'No'}</td>"
                     f"<td>{esc2(k.get('quien_lo_llena'))}</td>"
-                    f"<td>{esc2(k.get('de_donde_sale'))}</td></tr>"))
+                    f"<td>{esc2(k.get('de_donde_sale'))}</td>"
+                    f"<td>{esc2(k.get('hoy_se_guarda') or '—')}</td></tr>"))
                 + "</tbody></table></div>")) + "</section>")
 
     if c.get("duplicidades"):
@@ -1169,6 +1177,42 @@ def asegurar_enlace(pid):
 
     token = _asegurar_share(pid, u["id"])
     return jsonify({"ok": True, "url": _url_informe(token), "token": token})
+
+
+def _flujo_de(clase, ident):
+    if clase == "lote":
+        f = D.row("SELECT contenido FROM analisis_lote WHERE id=?", (ident,))
+    elif clase == "doc":
+        f = D.row("SELECT contenido FROM documentos WHERE id=?", (ident,))
+    else:
+        f = D.row("SELECT contenido FROM analisis WHERE id=?", (ident,))
+    if not f:
+        return None
+    return D.jload(f["contenido"], {}).get("flujo")
+
+
+@api.get("/flujo/<clase>/<ident>.svg")
+@login_required
+def flujo_svg(clase, ident):
+    """El diagrama del flujo. Se sirve como imagen para poder usarlo en la
+    pantalla, en el documento impreso y en el archivo descargado."""
+    if clase not in ("analisis", "lote", "doc"):
+        return jsonify({"error": "no_existe"}), 404
+    dibujo = F.svg(_flujo_de(clase, ident))
+    if not dibujo:
+        return jsonify({"error": "sin_flujo"}), 404
+    return Response(dibujo, mimetype="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
+
+
+@api.get("/flujo/<clase>/<ident>.mmd")
+@login_required
+def flujo_mermaid(clase, ident):
+    texto = F.a_mermaid(_flujo_de(clase, ident))
+    if not texto:
+        return jsonify({"error": "sin_flujo"}), 404
+    return Response(texto, mimetype="text/plain; charset=utf-8", headers={
+        "Content-Disposition": 'attachment; filename="flujo.mmd"'})
 
 
 @api.get("/indice")

@@ -4105,6 +4105,32 @@ function pintarAnalisis(cuerpo, p, lista) {
 
     ${bloque('Resumen', c.resumen ? `<p>${esc(c.resumen)}</p>` : '')}
 
+    ${c.flujo && (c.flujo.nodos || []).length > 1 ? `<section class="ia-bloque">
+      <h4>El flujo, paso a paso</h4>
+      <div class="lienzo-flujo"><img src="/api/flujo/analisis/${a.id}.svg" alt="Diagrama del flujo"></div>
+      <div class="flex wrap" style="gap:8px;margin-top:10px">
+        <a class="btn sm" href="/api/flujo/analisis/${a.id}.svg" download="flujo.svg">⤓ Imagen</a>
+        <a class="btn sm" href="/api/flujo/analisis/${a.id}.mmd">⤓ Para editarlo (Mermaid)</a>
+      </div>
+    </section>` : ''}
+
+    ${l(c.campos_formulario).length ? `<section class="ia-bloque">
+      <h4>Los formatos y sus campos</h4>
+      <p class="tiny">Lo que hoy se llena a mano o en pantalla. La última columna es la
+        que importa para el sistema: un dato en un papel archivado no está guardado.</p>
+      ${l(c.campos_formulario).map(f => `<div class="caja-doc">
+        <b>${esc(f.formulario || '')}</b> <span class="tiny">${esc(f.soporte || '')}</span>
+        <div class="tw"><table class="t"><thead><tr>
+          <th>Campo</th><th>Tipo</th><th>Oblig.</th><th>Quién lo llena</th><th>¿Se guarda hoy?</th>
+        </tr></thead><tbody>${l(f.campos).map(k => `<tr>
+          <td><b>${esc(k.nombre || '')}</b><div class="tiny">${esc(k.de_donde_sale || '')}</div></td>
+          <td>${esc(k.tipo || '')}</td><td>${k.obligatorio ? 'Sí' : 'No'}</td>
+          <td>${esc(k.quien_lo_llena || '')}</td>
+          <td><span class="guarda ${(k.hoy_se_guarda || '').startsWith('no') ? 'no' : ''}">${
+            esc(k.hoy_se_guarda || '—')}</span></td>
+        </tr>`).join('')}</tbody></table></div></div>`).join('')}
+    </section>` : ''}
+
     ${c.calidad ? `<div class="ia-calidad ${esc(c.calidad.completitud || '')}">
       <b>Completitud del levantamiento: ${esc(c.calidad.completitud || 'n/d')}</b>
       ${l(c.calidad.vacios).length ? `<ul>${l(c.calidad.vacios).map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : ''}
@@ -4615,6 +4641,15 @@ function verLote(x) {
 
     ${bloque('Panorama', c.panorama ? `<p>${esc(c.panorama)}</p>` : '')}
 
+    ${x.id && c.flujo && (c.flujo.nodos || []).length > 1 ? `<section class="ia-bloque">
+      <h4>El recorrido completo</h4>
+      <div class="lienzo-flujo"><img src="/api/flujo/lote/${x.id}.svg" alt="Diagrama del flujo"></div>
+      <div class="flex wrap" style="gap:8px;margin-top:10px">
+        <a class="btn sm" href="/api/flujo/lote/${x.id}.svg" download="flujo.svg">⤓ Imagen</a>
+        <a class="btn sm" href="/api/flujo/lote/${x.id}.mmd">⤓ Para editarlo</a>
+      </div>
+    </section>` : ''}
+
     ${bloque('Cadenas de trabajo', l(c.cadenas).length
       ? l(c.cadenas).map(cad => `<div class="cadena-lote">
           <b>${esc(cad.nombre || '')}</b>
@@ -5052,6 +5087,13 @@ async function abrirDocumento(did) {
     <div id="docCuerpo">
       ${seccion('panorama', 'Panorama', c.panorama ? `<p>${esc(c.panorama)}</p>` : '')}
 
+      ${c.flujo && (c.flujo.nodos || []).length > 1 ? seccion('flujo', 'El flujo, paso a paso',
+        `<div class="lienzo-flujo"><img src="/api/flujo/doc/${did}.svg" alt="Diagrama del flujo"></div>
+         <div class="flex wrap" style="gap:8px;margin-top:10px">
+           <a class="btn sm" href="/api/flujo/doc/${did}.svg" download="flujo.svg">⤓ Imagen</a>
+           <a class="btn sm" href="/api/flujo/doc/${did}.mmd">⤓ Para editarlo</a>
+         </div>`) : ''}
+
       ${seccion('cadenas', 'Cómo se encadena el trabajo', l(c.cadenas).length
         ? l(c.cadenas).map(x => `<div class="caja-doc"><b>${esc(x.nombre || '')}</b>
             <div class="cadena-flujo">${l(x.procesos).map(p =>
@@ -5065,11 +5107,14 @@ async function abrirDocumento(did) {
             <b>${esc(f.formulario || '')}</b>
             <div class="tiny">${esc(f.proceso || '')} · ${esc(f.soporte || '')}</div>
             <div class="tw"><table class="t"><thead><tr>
-              <th>Campo</th><th>Tipo</th><th>Oblig.</th><th>Quién lo llena</th><th>De dónde sale</th>
+              <th>Campo</th><th>Tipo</th><th>Oblig.</th><th>Quién lo llena</th>
+              <th>De dónde sale</th><th>¿Se guarda hoy?</th>
             </tr></thead><tbody>${l(f.campos).map(k => `<tr>
               <td><b>${esc(k.nombre || '')}</b></td><td>${esc(k.tipo || '')}</td>
               <td>${k.obligatorio ? 'Sí' : 'No'}</td>
               <td>${esc(k.quien_lo_llena || '')}</td><td>${esc(k.de_donde_sale || '')}</td>
+              <td><span class="guarda ${(k.hoy_se_guarda || '').startsWith('no') ? 'no' : ''}">${
+                esc(k.hoy_se_guarda || '—')}</span></td>
             </tr>`).join('')}</tbody></table></div></div>`).join('') : '')}
 
       ${seccion('duplicidades', 'Lo que se repite', l(c.duplicidades).length

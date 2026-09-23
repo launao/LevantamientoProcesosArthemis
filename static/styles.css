@@ -937,3 +937,11 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
   padding:9px 13px;cursor:pointer;font-size:14.5px;font-weight:600;background:var(--surface)}
 .dia-chip.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--accent)}
 .dia-chip input{width:18px;height:18px;margin:0}
+
+/* ── Diagrama del flujo ───────────────────────── */
+.lienzo-flujo{overflow-x:auto;border:1.5px solid var(--line);border-radius:10px;
+  background:var(--surface);padding:10px}
+.lienzo-flujo img,.lienzo-flujo svg{display:block;max-width:none;height:auto}
+.guarda{display:inline-block;font-size:12.5px;font-weight:600;border-radius:999px;padding:2px 10px;
+  background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.guarda.no{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
