@@ -95,6 +95,21 @@ const Almacen = (() => {
     return (await pendientes()).length;
   }
 
+  /** Devuelve a la cola los que quedaron marcados como fallidos. */
+  async function reiniciarFallidos() {
+    const db = await abrir();
+    const items = await pendientes();
+    await Promise.all(items.filter(x => (x.intentos || 0) >= 6).map(item =>
+      new Promise((res, rej) => {
+        const t = db.transaction('cola', 'readwrite');
+        item.intentos = 0;
+        item.ultimoError = '';
+        t.objectStore('cola').put(item);
+        t.oncomplete = res; t.onerror = () => rej(t.error);
+      })));
+    avisar();
+  }
+
   async function quitar(id) {
     const db = await abrir();
     await new Promise((res, rej) => {
@@ -266,7 +281,7 @@ const Almacen = (() => {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) procesar(); });
 
   return {
-    encolarArchivo, pendientes, contar, quitar, procesar, alCambiar,
+    encolarArchivo, pendientes, contar, quitar, procesar, reiniciarFallidos, alCambiar,
     guardarBorrador, leerBorrador, borrarBorrador,
     guardarTrozo, recuperarGrabaciones, borrarGrabacion
   };

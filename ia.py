@@ -218,6 +218,16 @@ Quien lee esto coordina una clínica, no compra metodologías.
 paciente" sirve; "implementar una solución de gestión documental" no sirve.
 - Si el levantamiento está muy incompleto, dilo con franqueza en 'calidad' en vez de \
 producir un análisis bonito sobre nada.
+- Para 'conexiones': te doy la lista de procesos ya levantados con lo que hace cada \
+uno, dónde empieza y dónde termina. Compara el final de este proceso con el comienzo \
+de los otros, y su comienzo con el final de los demás. Si esta persona dijo "se lo paso \
+a facturación" y existe un proceso cuyo arranque es "llega la cuenta de admisión", eso \
+es una conexión de confianza alta. Si solo se parecen por el área, es baja.
+- Marca 'ya_declarada' en true cuando la persona entrevistada mencionó esa conexión \
+explícitamente, y false cuando es deducción tuya: quien revisa necesita distinguir lo \
+que le contaron de lo que tú supusiste.
+- Usa el nombre EXACTO del catálogo. Si el proceso que mencionan no está levantado \
+todavía, no lo inventes en 'conexiones': dilo en 'vacios'.
 - El 'flujo' debe poder dibujarse: cada nodo un paso real, cada flecha una transición \
 que alguien mencionó. Usa 'decision' donde el caso se bifurca ("si trae autorización...") \
 y pon la condición en las flechas que salen de ahí. Entre 5 y 20 nodos: si te quedan \
@@ -283,10 +293,12 @@ marcas de código. Esta es la forma exacta:
     {"donde": "la pregunta o actividad donde está", "por_que": "qué esperas que aclare"}
   ],
   "conexiones": [
-    {"proceso": "nombre exacto de la lista de procesos existentes, o el nombre tal como lo mencionaron",
+    {"proceso": "nombre exacto tal como aparece en la lista de procesos ya levantados",
      "direccion": "antes | despues",
-     "razon": "por qué crees que conectan",
-     "confianza": "alta | media | baja"}
+     "razon": "en qué te basas: qué dijo esta persona y qué dice el otro proceso",
+     "que_se_entrega": "qué pasa de uno a otro: el paciente, la cuenta, la historia, el turno",
+     "confianza": "alta | media | baja",
+     "ya_declarada": false}
   ],
   "preguntas_para_la_siguiente_visita": ["..."]
 }

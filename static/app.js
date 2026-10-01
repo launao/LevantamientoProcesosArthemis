@@ -124,6 +124,8 @@ async function arrancar() {
     api('/indice').then(x => { S.indice = x.procesos; }).catch(() => { S.indice = []; });
     S.listo = true;
     aplicarRuta();
+    pintarIndicadorCola();
+    setInterval(pintarIndicadorCola, 4000);
     S.pollTimer = setInterval(refrescarSilencioso, 8000);
   } catch (e) {
     S.listo = true; render();
@@ -203,11 +205,36 @@ function procesosFiltrados() {
                     (a.nombre || '').localeCompare(b.nombre || ''));
 }
 
-function toast(msg) {
+/* Los avisos se apilan en una columna, no uno encima de otro. Si el mismo
+   mensaje llega varias veces seguidas —cosa normal al subir diez fotos—
+   se muestra uno solo con un contador. */
+function toast(msg, tipo) {
+  let pila = document.getElementById('avisos');
+  if (!pila) {
+    pila = document.createElement('div');
+    pila.id = 'avisos';
+    document.body.appendChild(pila);
+  }
+
+  const previo = [...pila.children].find(x => x.dataset.msg === msg);
+  if (previo) {
+    const n = (Number(previo.dataset.n) || 1) + 1;
+    previo.dataset.n = n;
+    previo.querySelector('.t-n').textContent = '×' + n;
+    clearTimeout(previo._t);
+    previo._t = setTimeout(() => previo.remove(), 3200);
+    return;
+  }
+
   const d = document.createElement('div');
-  d.className = 'toast'; d.textContent = msg;
-  document.body.appendChild(d);
-  setTimeout(() => d.remove(), 2600);
+  d.className = 'toast' + (tipo ? ' ' + tipo : '');
+  d.dataset.msg = msg;
+  d.innerHTML = `<span class="t-txt"></span><span class="t-n"></span>`;
+  d.querySelector('.t-txt').textContent = msg;
+  pila.appendChild(d);
+
+  while (pila.children.length > 4) pila.firstChild.remove();
+  d._t = setTimeout(() => d.remove(), 3200);
 }
 
 let saveT = null;
@@ -1112,6 +1139,7 @@ function vistaProceso(m) {
     <span class="tiny" id="estadoGuardado"></span>
     ${ro ? '' : '<button class="btn sm" id="btnGuardar" title="Guardar ahora (Ctrl+S)">Guardar</button>'}
     ${esAdmin() ? '<button class="btn sm" id="btnIA" title="Que Claude analice este levantamiento">✨ Análisis</button>' : ''}
+    <button class="btn sm" id="btnDiag" title="Revisar si las fotos y audios subieron">⇅ Subidas</button>
     <button class="btn sm" id="btnInforme" title="Ver, compartir o descargar el informe">📄 Informe</button>
     ${ro ? '' : '<button class="btn sm" id="btnHist" title="Ver y recuperar versiones anteriores">🕘 Historial</button>'}
     ${ro ? '' : '<button class="btn sm" id="btnQR">📱 Celular</button>'}
@@ -1179,6 +1207,9 @@ function vistaProceso(m) {
   pintarEstadoGuardado(S.dirty ? 'escribiendo' : 'guardado');
   const be = document.getElementById('btnEnviar');
   if (be) be.onclick = () => enviarProceso(p);
+
+  const bd = document.getElementById('btnDiag');
+  if (bd) bd.onclick = () => modalDiagnostico(p.id);
 
   const bia = document.getElementById('btnIA');
   if (bia) bia.onclick = () => modalAnalisis(p);
@@ -4184,19 +4215,35 @@ function pintarAnalisis(cuerpo, p, lista) {
       ? `<ul class="ia-lista">${l(c.preguntas_para_la_siguiente_visita).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '')}
 
     ${l(c.conexiones).length ? `<section class="ia-bloque">
-      <h4>Conexiones que propone</h4>
-      <p class="tiny">Marca las que sean ciertas. Al aprobar el análisis, esas se aplican
-        al proceso y aparecen en el mapa. Las demás se ignoran.</p>
-      <div class="ia-conexiones">${l(c.conexiones).map((x, i) => `
-        <label class="ia-conex">
-          <input type="checkbox" data-conex="${i}"
-            ${(c.conexiones_aprobadas || []).some(y => y.proceso === x.proceso) ? 'checked' : ''}>
-          <span>
-            <b>${x.direccion === 'antes' ? 'Viene de' : 'Pasa a'}: ${esc(x.proceso || '')}</b>
-            <span class="et conf-${esc(x.confianza || '')}">${esc(x.confianza || '')}</span>
-            <div class="tiny">${esc(x.razon || '')}</div>
-          </span>
-        </label>`).join('')}</div>
+      <h4>Con qué procesos se conecta</h4>
+      <p class="tiny">Marca las que sean ciertas. Al aprobar el análisis se aplican al
+        proceso y aparecen en el mapa. Las que no marques se ignoran.</p>
+
+      ${['antes', 'despues'].map(dir => {
+        const suyas = l(c.conexiones)
+          .map((x, i) => ({ x, i }))
+          .filter(({ x }) => (x.direccion || 'despues') === dir);
+        if (!suyas.length) return '';
+        return `<div class="grupo-conex">
+          <div class="gc-titulo">${dir === 'antes'
+            ? '◀ Lo que pasa ANTES — de aquí le llega el trabajo'
+            : '▶ Lo que sigue DESPUÉS — a esto le entrega'}</div>
+          ${suyas.map(({ x, i }) => `
+            <label class="ia-conex ${x.ya_declarada ? 'declarada' : 'deducida'}">
+              <input type="checkbox" data-conex="${i}"
+                ${(c.conexiones_aprobadas || []).some(y => y.proceso === x.proceso) ? 'checked' : ''}>
+              <span>
+                <b>${esc(x.proceso || '')}</b>
+                <span class="et conf-${esc(x.confianza || '')}">${esc(x.confianza || '')}</span>
+                ${x.ya_declarada
+                  ? '<span class="et declarada">lo dijeron en la entrevista</span>'
+                  : '<span class="et deducida">deducción de Claude</span>'}
+                ${x.que_se_entrega ? `<div class="entrega">Pasa: <b>${esc(x.que_se_entrega)}</b></div>` : ''}
+                <div class="tiny">${esc(x.razon || '')}</div>
+              </span>
+            </label>`).join('')}
+        </div>`;
+      }).join('')}
     </section>` : ''}
 
     ${a.estado === 'propuesto' ? `<div class="ia-decidir">
@@ -5710,4 +5757,134 @@ function modalRepeticion(p, base, guardar) {
     box.querySelector('#rHasta').value = d.toISOString().slice(0, 10);
     previo();
   });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Estado de las subidas
+
+   La cola trabaja sola y en silencio, lo que está bien hasta que uno
+   necesita saber si las fotos llegaron. Este indicador vive siempre en
+   pantalla cuando hay algo en cola, y abre un panel que compara lo que
+   el teléfono tiene pendiente con lo que el servidor realmente guardó.
+   ═══════════════════════════════════════════════════════════════ */
+async function pintarIndicadorCola() {
+  let ind = document.getElementById('indCola');
+  let pend = [];
+  try { pend = await Almacen.pendientes(); } catch (_) { return; }
+
+  const atascados = pend.filter(x => (x.intentos || 0) >= 6);
+  const subiendo = pend.length - atascados.length;
+
+  if (!pend.length) {
+    if (ind) ind.remove();
+    return;
+  }
+
+  if (!ind) {
+    ind = document.createElement('button');
+    ind.id = 'indCola';
+    ind.onclick = modalDiagnostico;
+    document.body.appendChild(ind);
+  }
+
+  ind.className = 'ind-cola' + (atascados.length ? ' atascado' : '');
+  ind.innerHTML = atascados.length
+    ? `<span class="ic-punto"></span>${atascados.length} archivo(s) sin subir`
+    : `<span class="ic-punto girando"></span>Subiendo ${subiendo}…`;
+}
+
+async function modalDiagnostico(procesoId) {
+  const pid = typeof procesoId === 'string' ? procesoId : (S.draft && S.draft.id) || '';
+
+  modal(`<h3>¿Se están subiendo los archivos?</h3>
+    <div id="diagCuerpo"><div class="mut">Revisando…</div></div>
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" id="diagReintentar">Reintentar ahora</button>
+      <button class="btn" id="diagRefrescar">Volver a revisar</button>
+      <button class="btn right" data-cerrar>Cerrar</button>
+    </div>`, box => {
+    const cuerpo = box.querySelector('#diagCuerpo');
+
+    const revisar = async () => {
+      cuerpo.innerHTML = '<div class="mut">Revisando…</div>';
+      let pend = [], serv = null;
+      try { pend = await Almacen.pendientes(pid || undefined); } catch (_) {}
+      try { serv = await api('/diagnostico' + (pid ? '?proceso=' + pid : '')); } catch (_) {}
+
+      const atascados = pend.filter(x => (x.intentos || 0) >= 6);
+      const enCurso = pend.filter(x => (x.intentos || 0) < 6);
+
+      cuerpo.innerHTML = `
+        ${pid ? `<div class="tiny" style="margin-bottom:10px">Sobre este proceso.
+          <a href="#" id="diagTodo">Ver todos</a></div>` : ''}
+
+        <div class="grid g3" style="margin-bottom:16px">
+          <div class="kpi"><div class="n">${serv ? (serv.porTipo.foto || 0) : '?'}</div>
+            <div class="t">fotos en el servidor</div></div>
+          <div class="kpi"><div class="n">${serv ? (serv.porTipo.audio || 0) : '?'}</div>
+            <div class="t">audios en el servidor</div></div>
+          <div class="kpi ${enCurso.length ? 'alerta' : ''}"><div class="n">${enCurso.length}</div>
+            <div class="t">esperando turno aquí</div></div>
+        </div>
+
+        ${!navigator.onLine ? '<div class="aviso-ia error">Este equipo no tiene conexión. Lo que falta se subirá solo al recuperarla.</div>' : ''}
+
+        ${atascados.length ? `<div class="aviso-ia error">
+          <b>${atascados.length} archivo(s) no pudieron subirse</b> después de varios intentos.
+          <div class="tiny" style="margin-top:6px">${atascados.slice(0, 5).map(x =>
+            `${esc(x.nombre || 'archivo')} — ${esc(traducirError(x.ultimoError))}`).join('<br>')}</div>
+          <button class="btn sm" id="diagForzar" style="margin-top:9px">Intentar otra vez estos</button>
+        </div>` : ''}
+
+        ${enCurso.length ? `<div class="aviso-ia">
+          ${enCurso.length} archivo(s) en cola. Se suben solos; no hace falta esperar en esta pantalla.
+        </div>` : (!atascados.length ? '<div class="aviso-ia ok">No queda nada pendiente en este equipo.</div>' : '')}
+
+        ${serv && serv.rotas.length ? `<div class="aviso-ia error" style="margin-top:12px">
+          <b>${serv.rotas.length} evidencia(s) quedaron sin archivo.</b>
+          <div class="tiny">Se registraron pero el archivo no llegó. Habría que volver a tomarlas.</div>
+        </div>` : ''}
+
+        ${serv && serv.recientes.length ? `<div style="margin-top:16px">
+          <span class="lbl">Lo último que llegó al servidor</span>
+          <div class="tw"><table class="t"><tbody>${serv.recientes.map(r => `<tr>
+            <td style="width:30px">${r.tipo === 'foto' ? '📷' : r.tipo === 'audio' ? '🎙' : '📝'}</td>
+            <td><b>${esc(r.campo || 'general')}</b>
+              <div class="tiny">${esc(fechaLarga(r.creado))} · desde ${esc(r.origen)}</div></td>
+            <td style="width:80px" class="tiny">${r.kb ? r.kb + ' KB' : ''}</td>
+            <td style="width:40px">${r.ok ? '<span class="guarda">ok</span>' : '<span class="guarda no">falta</span>'}</td>
+          </tr>`).join('')}</tbody></table></div>
+          <div class="tiny" style="margin-top:8px">${serv.megas} MB guardados en total.</div>
+        </div>` : ''}`;
+
+      const todo = cuerpo.querySelector('#diagTodo');
+      if (todo) todo.onclick = e => { e.preventDefault(); cerrarModal(); modalDiagnostico(''); };
+
+      const forzar = cuerpo.querySelector('#diagForzar');
+      if (forzar) forzar.onclick = async () => {
+        await Almacen.reiniciarFallidos();
+        await Almacen.procesar();
+        revisar();
+      };
+    };
+
+    box.querySelector('#diagReintentar').onclick = async () => {
+      await Almacen.procesar();
+      toast('Reintentando lo pendiente');
+      revisar();
+    };
+    box.querySelector('#diagRefrescar').onclick = revisar;
+
+    revisar();
+  });
+}
+
+function traducirError(e) {
+  const m = {
+    sesion_o_enlace_vencido: 'la sesión se venció: vuelve a entrar',
+    archivo_rechazado: 'el archivo es muy pesado o de un formato no admitido',
+    http_500: 'el servidor falló al recibirlo',
+    http_404: 'el proceso ya no existe'
+  };
+  return m[e] || (String(e || '').startsWith('http_') ? 'el servidor respondió con error' : (e || 'sin conexión'));
 }

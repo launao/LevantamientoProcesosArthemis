@@ -515,7 +515,7 @@ def analizar_proceso(pid):
                         "FROM evidencias WHERE proceso_id=? ORDER BY creado", (pid,))
 
     texto = ia.armar_texto(p, plantilla, respuestas, nombres, procesos, evidencias)
-    catalogo = [f"{x['nombre']} ({x['area'] or 'sin área'})" for x in otros]
+    catalogo = _catalogo_para_ia(pid)
     imagenes = _imagenes_para_ia(pid, plantilla, evidencias)
 
     try:
@@ -541,6 +541,31 @@ def analizar_proceso(pid):
                     "reparado": bool(analisis.get("_reparado")),
                     "fotosEnviadas": len(imagenes),
                     "audios": sum(1 for e in evidencias if e["tipo"] == "audio")})
+
+
+def _catalogo_para_ia(excluir=None):
+    """Los otros procesos con lo justo para poder enlazarlos.
+
+    Solo el nombre no alcanza: para saber si dos procesos se tocan hay que
+    comparar dónde termina uno con dónde empieza el otro. Se manda eso.
+    """
+    salida = []
+    for x in D.rows("SELECT id, nombre, area, respuestas FROM procesos "
+                    "WHERE COALESCE(eliminado,0)=0 ORDER BY codigo, nombre"):
+        if x["id"] == excluir:
+            continue
+        r = D.jload(x["respuestas"], {})
+        def corto(campo, n=110):
+            return a_texto_plano(str(r.get(campo) or ""))[:n]
+        partes = [f"- {x['nombre']} ({x['area'] or 'sin área'})"]
+        if corto("f_objetivo"):
+            partes.append(f"    para qué es: {corto('f_objetivo')}")
+        if corto("f_inicio"):
+            partes.append(f"    arranca cuando: {corto('f_inicio')}")
+        if corto("f_fin"):
+            partes.append(f"    termina cuando: {corto('f_fin')}")
+        salida.append("\n".join(partes))
+    return salida
 
 
 def _imagenes_para_ia(pid, plantilla, evidencias):
@@ -1213,6 +1238,64 @@ def flujo_mermaid(clase, ident):
         return jsonify({"error": "sin_flujo"}), 404
     return Response(texto, mimetype="text/plain; charset=utf-8", headers={
         "Content-Disposition": 'attachment; filename="flujo.mmd"'})
+
+
+@api.get("/diagnostico")
+@login_required
+def diagnostico():
+    """Qué hay realmente guardado en el servidor.
+
+    Sirve para contrastar con lo que el celular cree haber subido: si el
+    teléfono dice diez fotos y aquí hay siete, la diferencia está en la
+    cola o se perdió, y conviene saberlo antes de dar el proceso por
+    terminado.
+    """
+    u = usuario_actual()
+    pid = request.args.get("proceso")
+
+    if pid:
+        p = D.row("SELECT id, nombre, responsable_id FROM procesos WHERE id=?", (pid,))
+        if not p:
+            return jsonify({"error": "no_existe"}), 404
+        if u["rol"] not in ("admin", "clinica", "lector") and not _mio(p, u):
+            return jsonify({"error": "sin_permiso"}), 403
+        donde = ("WHERE e.proceso_id=?", (pid,))
+    elif u["rol"] == "admin":
+        donde = ("", ())
+    else:
+        donde = ("WHERE p.responsable_id=?", (u["id"],))
+
+    filas = D.rows(
+        f"SELECT e.id, e.tipo, e.campo_id, e.media_id, e.creado, e.origen, "
+        f"       m.id AS mid, m.tamano, m.content_type "
+        f"FROM evidencias e "
+        f"JOIN procesos p ON p.id = e.proceso_id "
+        f"LEFT JOIN media m ON m.id = e.media_id "
+        f"{donde[0]} ORDER BY e.creado DESC", donde[1])
+
+    por_tipo, rotas, bytes_total = {}, [], 0
+    for f in filas:
+        t = f["tipo"] or "?"
+        por_tipo[t] = por_tipo.get(t, 0) + 1
+        if f["media_id"] and not f["mid"]:
+            # La evidencia quedó apuntando a un archivo que no está: es el
+            # síntoma de una subida interrumpida.
+            rotas.append({"id": f["id"], "tipo": t, "campo": f["campo_id"] or "",
+                          "creado": str(f["creado"])})
+        bytes_total += f["tamano"] or 0
+
+    recientes = [{
+        "tipo": f["tipo"], "campo": f["campo_id"] or "", "creado": str(f["creado"]),
+        "origen": f["origen"] or "escritorio",
+        "kb": round((f["tamano"] or 0) / 1024),
+        "ok": bool(f["mid"]) or f["tipo"] == "nota",
+    } for f in filas[:25]]
+
+    return jsonify({
+        "total": len(filas), "porTipo": por_tipo, "rotas": rotas,
+        "megas": round(bytes_total / 1048576, 1), "recientes": recientes,
+        "proceso": pid or "",
+    })
 
 
 @api.get("/indice")
