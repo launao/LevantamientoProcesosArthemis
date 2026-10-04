@@ -7139,8 +7139,11 @@ function modalSubirVideo(procesoId) {
       if (!fs.length) { aviso.innerHTML = ''; return; }
       const mb = fs.reduce((a, f) => a + f.size, 0) / 1048576;
       const hayMedia = (archivo.files || []).length > 0;
+      const min = Math.max(1, Math.round(mb / (25 / 8) / 60));
       aviso.innerHTML = `<div class="aviso-ia">
-        <b>${fs.length} foto(s)</b> · ${Math.round(mb)} MB.
+        <b>${fs.length} foto(s)</b> · ${Math.round(mb)} MB
+        ${fs.length > 30 ? `· unos ${min} min por wifi. Van de a cinco y te va
+          diciendo cuántas llevan; no cierres esta ventana.` : '.'}
         ${hayMedia
           ? 'Se guardan con la entrevista y la app las ubica en su paso al analizarla.'
           : (proceso.value
@@ -7301,54 +7304,69 @@ function modalRetomarSubida(g) {
    mirando una pantalla quieta sin saber si aquello avanza. */
 const FOTOS_POR_TANDA = 5;
 
-async function subirFotosSueltas(procesoId, fotos, box) {
+/* Manda las fotos de a poquitas, contando en voz alta.
+
+   Lo usan los dos caminos —las fotos de una entrevista y las que van
+   sueltas a un proceso— porque el problema es el mismo: un envío con
+   todas no cabe, y sin avance nadie sabe si aquello está trabajando o
+   se colgó. Devuelve cuántas entraron y cuántas no. */
+async function porTandas(fotos, box, url, rotulo, extra) {
   const barra = box.querySelector('#svBarra');
   const texto = box.querySelector('#svTexto');
   const cual = box.querySelector('#svCual');
   const decir = t => { if (texto) texto.textContent = t; };
-  if (cual) cual.textContent = `${fotos.length} fotos`;
+  if (cual) cual.textContent = `${rotulo}: ${fotos.length} foto(s)`;
+  decir(`0 de ${fotos.length}`);
 
-  const campoPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c;
   let hechas = 0, fallidas = 0;
-
   for (let i = 0; i < fotos.length; i += FOTOS_POR_TANDA) {
     const tanda = fotos.slice(i, i + FOTOS_POR_TANDA);
     const cuerpo = new FormData();
     tanda.forEach(f => cuerpo.append('fotos', f));
-    if (campoPasos) cuerpo.append('campo', campoPasos.id);
+    if (extra) Object.entries(extra).forEach(([k, v]) => cuerpo.append(k, v));
 
     let bien = false;
     for (let intento = 1; intento <= 3 && !bien; intento++) {
       try {
-        const r = await fetch(`/api/procesos/${procesoId}/evidencias/lote`,
-                              { method: 'POST', credentials: 'same-origin', body: cuerpo });
+        const r = await fetch(url, { method: 'POST', credentials: 'same-origin',
+                                     body: cuerpo });
         const d = await r.json();
         if (!r.ok) throw d;
-        hechas += (d.puestas || []).length;
+        hechas += (d.puestas ? d.puestas.length : tanda.length)
+                - (d.rechazadas ? d.rechazadas.length : 0);
         fallidas += (d.rechazadas || []).length;
         bien = true;
       } catch (_) {
         // Una tanda que falla no debe tumbar las quinientas: se reintenta
-        // y, si no, se sigue con las demás y al final se dice cuántas
-        // quedaron fuera.
+        // y, si no, se sigue con las demás.
         if (intento === 3) fallidas += tanda.length;
         else await new Promise(r => setTimeout(r, 1500 * intento));
       }
     }
 
-    const pc = Math.min(100, (i + tanda.length) / fotos.length * 100);
-    if (barra) barra.style.width = pc.toFixed(1) + '%';
-    decir(`${hechas} de ${fotos.length} subidas`);
+    if (barra) barra.style.width =
+      ((i + tanda.length) / fotos.length * 100).toFixed(1) + '%';
+    decir(`${hechas} de ${fotos.length} subidas`
+          + (fallidas ? ` · ${fallidas} no se pudieron` : ''));
   }
+  return { hechas, fallidas };
+}
 
-  decir(fallidas
+async function subirFotosSueltas(procesoId, fotos, box) {
+  const campoPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c;
+  const { hechas, fallidas } = await porTandas(
+    fotos, box, `/api/procesos/${procesoId}/evidencias/lote`,
+    'Subiendo al proceso', campoPasos ? { campo: campoPasos.id } : null);
+
+  const texto = box.querySelector('#svTexto');
+  if (texto) texto.textContent = fallidas
     ? `${hechas} subidas · ${fallidas} no se pudieron`
-    : `Listas las ${hechas}.`);
+    : `Listas las ${hechas}.`;
   toast(fallidas ? `${fallidas} foto(s) quedaron fuera` : `${hechas} fotos subidas`);
   setTimeout(() => {
     cerrarModal();
     if (S.procId === procesoId) abrirProceso(procesoId);
-  }, 1400);
+  }, 1600);
 }
 
 
@@ -7378,23 +7396,13 @@ async function subirVideo(archivo, procesoId, box, fotos, vienenMas) {
     return false;
   }
 
-  // Las fotos van antes que el audio: son pocos megas y tienen que estar
-  // guardadas cuando el análisis termine de oír, que es cuando se miran.
+  // Las fotos van antes que el audio: tienen que estar guardadas cuando el
+  // análisis termine de oír, que es cuando se miran. Van por tandas, igual
+  // que las sueltas: quinientas en un solo envío pesan más de un giga, no
+  // caben, y además dejaban la pantalla quieta sin decir nada.
   if (fotos && fotos.length) {
-    const texto2 = box.querySelector('#svTexto');
-    if (texto2) texto2.textContent = `Subiendo ${fotos.length} foto(s)…`;
-    const cuerpo = new FormData();
-    fotos.forEach(f => cuerpo.append('fotos', f));
-    try {
-      const r = await fetch(`/api/grabaciones/${gid}/fotos`,
-                            { method: 'POST', credentials: 'same-origin', body: cuerpo });
-      const d = await r.json();
-      if (d.rechazadas && d.rechazadas.length) {
-        toast(`${d.rechazadas.length} archivo(s) no eran fotos y quedaron fuera`);
-      }
-    } catch (_) {
-      toast('No se pudieron subir las fotos; la grabación sigue');
-    }
+    await porTandas(fotos, box, `/api/grabaciones/${gid}/fotos`,
+                    'Guardando las fotos');
   }
 
   return bucleSubida(archivo, gid, trozo, 0, box, vienenMas);
