@@ -6260,6 +6260,11 @@ async function vistaEntrevistas(m) {
     b.onclick = () => abrirGrabacion(b.dataset.vergrab));
   m.querySelectorAll('[data-retomar]').forEach(b => b.onclick = () =>
     modalRetomarSubida(gs.find(g => g.id === b.dataset.retomar)));
+  // Seguir echándole material al mismo proceso: abre la ventana de subir
+  // con ese proceso ya escogido, que es lo que uno quiere al ver una
+  // entrevista suya y acordarse de que faltó una parte.
+  m.querySelectorAll('[data-masmaterial]').forEach(b => b.onclick = () =>
+    modalSubirVideo(b.dataset.masmaterial));
   m.querySelectorAll('[data-borrargrab]').forEach(b => b.onclick = async () => {
     if (!confirm('Se borra lo que la app entendió de esta entrevista. El video tuyo no se toca. ¿Seguir?')) return;
     await api('/grabaciones/' + b.dataset.borrargrab, { method: 'DELETE' });
@@ -6333,6 +6338,8 @@ function tarjetaGrabacion(g) {
       ${g.estado === 'listo' ? `<button class="btn p" data-vergrab="${g.id}">${
         g.volcada ? 'Ver la entrevista' : 'Revisar y enviar al proceso'}</button>` : ''}
       ${g.estado === 'listo' ? `<button class="btn sm" data-vergrab="${g.id}">Leer la transcripción</button>` : ''}
+      ${g.procesoId ? `<button class="btn sm" data-masmaterial="${g.procesoId}">
+        ＋ Seguir alimentando ${esc(etiquetaProceso(g.procesoId).split(' · ')[0])}</button>` : ''}
       <button class="btn sm danger right" data-borrargrab="${g.id}">Borrar</button>
     </div>
   </div>`;
@@ -7070,12 +7077,14 @@ function modalSubirVideo(procesoId) {
           p.id === procesoId ? 'selected' : ''}>${esc(etiquetaProceso(p.id))}</option>`).join('')}
       </select></label>
 
-    <label class="f"><span class="lbl">El video o el audio de la entrevista</span>
-      <span class="hint">Puede ser de hasta dos horas. Si ya tienes solo el audio
-        —una grabadora de voz, un memo de WhatsApp— súbelo así: pesa cien veces
-        menos y sube en un minuto. Del video no se guarda nada: se le saca la voz,
-        las fotos de los momentos que importan, y se borra.</span>
-      <input type="file" id="svArchivo"
+    <label class="f"><span class="lbl">Los videos o audios de la entrevista</span>
+      <span class="hint">Puedes escoger varios de una vez: cada uno entra como una
+        entrevista aparte del mismo proceso, y se suben uno tras otro. Cada uno
+        puede ser de hasta dos horas. Si ya tienes solo el audio —una grabadora de
+        voz, un memo de WhatsApp— súbelo así: pesa cien veces menos y sube en un
+        minuto. Del video no se guarda nada: se le saca la voz, las fotos de los
+        momentos que importan, y se borra.</span>
+      <input type="file" id="svArchivo" multiple
         accept="video/*,audio/*,.mp4,.mov,.m4v,.avi,.mkv,.m4a,.mp3,.wav,.aac,.ogg,.opus"></label>
 
     <label class="f"><span class="lbl">Las fotos que tomaron, si hay</span>
@@ -7087,7 +7096,8 @@ function modalSubirVideo(procesoId) {
     <div id="svInfo"></div>
     <div id="svProgreso" class="oculto">
       <div class="sv-barra"><i id="svBarra" style="width:0%"></i></div>
-      <div class="flex" style="margin-top:8px">
+      <div class="tiny" id="svCual" style="margin-top:8px;font-weight:650"></div>
+      <div class="flex" style="margin-top:6px">
         <span class="tiny" id="svTexto">Preparando…</span>
         <button class="btn sm right" id="svCancelar">Cancelar</button>
       </div>
@@ -7107,34 +7117,53 @@ function modalSubirVideo(procesoId) {
     const empezar = box.querySelector('#svEmpezar');
 
     archivo.onchange = () => {
-      const f = archivo.files[0];
-      if (!f) { info.innerHTML = ''; empezar.disabled = true; return; }
-      const mb = f.size / 1048576;
+      const fs = Array.from(archivo.files || []);
+      if (!fs.length) { info.innerHTML = ''; empezar.disabled = true; return; }
+
+      const total = fs.reduce((a, f) => a + f.size, 0);
+      const mb = total / 1048576;
       const lento = mb / (25 / 8) / 60;      // minutos a 25 Mbps
       // Se mira el tipo que declara el aparato y, si no dice nada, la
       // extensión: algunos Android mandan los audios sin tipo.
-      const esAudio = /^audio\//.test(f.type || '')
-        || /\.(m4a|mp3|wav|aac|ogg|opus|amr|caf)$/i.test(f.name);
+      const soloVoz = fs.every(f => /^audio\//.test(f.type || '')
+        || /\.(m4a|mp3|wav|aac|ogg|opus|amr|caf)$/i.test(f.name));
+
       info.innerHTML = `<div class="aviso-ia">
-        <b>${esc(f.name)}</b><br>
-        ${mb > 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'} ·
+        <b>${fs.length === 1 ? esc(fs[0].name) : fs.length + ' archivos'}</b><br>
+        ${mb > 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'} en total ·
         por wifi normal tardaría unos ${Math.max(1, Math.round(lento))} min.
-        ${esAudio
+        ${fs.length > 1 ? `<br>Entran como ${fs.length} entrevistas del mismo proceso,
+          una tras otra. Al revisarlas decides en qué orden van sus pasos.` : ''}
+        ${soloVoz
           ? '<br>Es solo audio: sube rápido y sirve igual para el paso a paso. '
-            + 'Lo único que no tendrá son las fotos, porque esas salen de mirar el video.'
+            + 'Lo único que no tendrá son las fotos del video; si tomaron fotos a '
+            + 'mano, añádelas abajo.'
           : (mb > 6000 ? '<br><b>Es muy pesado.</b> Si graban en 4K, bajen a 1080p: para una entrevista se ve igual y pesa la tercera parte.' : '')}
       </div>`;
       empezar.disabled = false;
     };
 
     empezar.onclick = async () => {
-      const f = archivo.files[0];
-      if (!f) return;
+      const fs = Array.from(archivo.files || []);
+      if (!fs.length) return;
       empezar.disabled = true;
       archivo.disabled = true;
       box.querySelector('#svProgreso').classList.remove('oculto');
       const fotos = Array.from((box.querySelector('#svFotos') || {}).files || []);
-      await subirVideo(f, box.querySelector('#svProceso').value, box, fotos);
+      const proceso = box.querySelector('#svProceso').value;
+
+      // Uno tras otro, no a la vez: dos subidas grandes compitiendo por el
+      // mismo wifi tardan lo mismo entre las dos y las dos van lentas, pero
+      // así al menos la primera queda lista pronto.
+      for (let i = 0; i < fs.length; i++) {
+        const cab = box.querySelector('#svCual');
+        if (cab) cab.textContent = fs.length > 1
+          ? `Archivo ${i + 1} de ${fs.length}: ${fs[i].name}` : fs[i].name;
+        // Las fotos van con la primera, que es donde está la entrevista.
+        const ok = await subirVideo(fs[i], proceso, box, i === 0 ? fotos : null,
+                                    i < fs.length - 1);
+        if (ok === false) break;
+      }
     };
 
     box.querySelector('#svCancelar').onclick = async () => {
@@ -7219,7 +7248,7 @@ function modalRetomarSubida(g) {
 }
 
 
-async function subirVideo(archivo, procesoId, box, fotos) {
+async function subirVideo(archivo, procesoId, box, fotos, vienenMas) {
   const texto = box.querySelector('#svTexto');
   const decir = (t) => { if (texto) texto.textContent = t; };
 
@@ -7240,7 +7269,9 @@ async function subirVideo(archivo, procesoId, box, fotos) {
       // forma de saber qué pasó sin entrar a los registros de Railway.
       (e.data && e.data.detalle) || (c ? 'El servidor dijo: ' + c : '')
       || (e.status ? 'Error ' + e.status + ' del servidor.' : 'Revisa la conexión.'))));
-    return;
+    // Se devuelve false para que un lote se detenga en vez de seguir
+    // estrellándose archivo tras archivo contra el mismo problema.
+    return false;
   }
 
   // Las fotos van antes que el audio: son pocos megas y tienen que estar
@@ -7262,13 +7293,13 @@ async function subirVideo(archivo, procesoId, box, fotos) {
     }
   }
 
-  return bucleSubida(archivo, gid, trozo, 0, box);
+  return bucleSubida(archivo, gid, trozo, 0, box, vienenMas);
 }
 
 
 /* El bucle que manda los trozos. Lo usan tanto la subida nueva como la
    que se retoma, para que no haya dos versiones que se desincronicen. */
-async function bucleSubida(archivo, gid, trozo, desde, box) {
+async function bucleSubida(archivo, gid, trozo, desde, box, vienenMas) {
   const barra = box.querySelector('#svBarra');
   const texto = box.querySelector('#svTexto');
   const decir = (t) => { if (texto) texto.textContent = t; };
@@ -7285,7 +7316,7 @@ async function bucleSubida(archivo, gid, trozo, desde, box) {
   avanzar(desde, archivo.size);
 
   while (desde < archivo.size) {
-    if (SUBIDA.activa !== gid) { decir('Cancelada.'); return; }
+    if (SUBIDA.activa !== gid) { decir('Cancelada.'); return false; }
 
     const fin = Math.min(desde + trozo, archivo.size);
     try {
@@ -7303,7 +7334,7 @@ async function bucleSubida(archivo, gid, trozo, desde, box) {
         if (++desfases > 5) {
           decir('La subida se desacomodó. Descártala y empieza de nuevo.');
           SUBIDA.activa = null;
-          return;
+          return false;
         }
         desde = d.recibidos || 0;
         continue;
@@ -7331,7 +7362,7 @@ async function bucleSubida(archivo, gid, trozo, desde, box) {
         decir('Se perdió la conexión. Lo que llegó queda guardado: entra a '
               + 'Entrevistas y dale «Seguir subiendo» cuando vuelva el wifi.');
         SUBIDA.activa = null;
-        return;
+        return false;
       }
       // Se espera cada vez un poco más: si el wifi se cayó, insistir cada
       // segundo no lo trae de vuelta y sí gasta batería.
@@ -7348,8 +7379,14 @@ async function bucleSubida(archivo, gid, trozo, desde, box) {
   avanzar(1, 1);
   try {
     await api(`/grabaciones/${gid}/subir/terminar`, { method: 'POST' });
-    decir('Listo. La app la está analizando.');
-    setTimeout(() => { cerrarModal(); S.vista = 'entrevistas'; irA('entrevistas'); render(); }, 1200);
+    if (vienenMas) {
+      // Quedan archivos por subir: no se cierra la ventana ni se recarga
+      // la pantalla, porque eso cortaría el resto del lote.
+      decir('Listo. Sigue el siguiente…');
+    } else {
+      decir('Listo. La app la está analizando.');
+      setTimeout(() => { cerrarModal(); S.vista = 'entrevistas'; irA('entrevistas'); render(); }, 1200);
+    }
   } catch (e) {
     const c = (e.data && e.data.error) || '';
     decir({
