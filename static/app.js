@@ -6767,7 +6767,11 @@ async function subirVideo(archivo, procesoId, box) {
       sin_llave_voz: 'Falta configurar el servicio de voz. Avísale a la coordinación.',
       video_muy_grande: (e.data && e.data.detalle) || 'El video es muy pesado.',
       sin_espacio: (e.data && e.data.detalle) || 'No hay espacio ahora mismo.'
-    }[c] || 'No se pudo empezar la subida.');
+    }[c] || ('No se pudo empezar la subida. ' + (
+      // Sin esto, cualquier fallo del servidor se veía igual y no había
+      // forma de saber qué pasó sin entrar a los registros de Railway.
+      (e.data && e.data.detalle) || (c ? 'El servidor dijo: ' + c : '')
+      || (e.status ? 'Error ' + e.status + ' del servidor.' : 'Revisa la conexión.'))));
     return;
   }
 

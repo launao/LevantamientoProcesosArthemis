@@ -14,7 +14,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta
 
-from flask import Blueprint, jsonify, request, send_file, Response
+from flask import Blueprint, jsonify, request, send_file, Response, current_app
 
 import db as D
 import documentos as Doc
@@ -1417,13 +1417,26 @@ def subir_iniciar():
         return jsonify({"error": "sin_llave_voz"}), 422
 
     SUB.limpiar_viejas()
-    gid = E.crear(d.get("nombre") or "entrevista", pid, u["id"],
-                  int(d.get("duracion") or 0), int(d.get("bytes") or 0), 0)
+    try:
+        gid = E.crear(d.get("nombre") or "entrevista", pid, u["id"],
+                      int(d.get("duracion") or 0), int(d.get("bytes") or 0), 0)
+    except Exception as e:
+        # Un fallo aquí llegaba al navegador como un 500 sin texto, y la
+        # app solo podía decir «no se pudo empezar». Mejor decir qué fue.
+        current_app.logger.exception("no se pudo abrir la grabación")
+        return jsonify({"error": "no_se_pudo_registrar",
+                        "detalle": f"La base rechazó la grabación: {str(e)[:200]}"}), 500
     try:
         info = SUB.iniciar(gid, d.get("nombre") or "", d.get("bytes") or 0)
     except SUB.SubidaError as e:
         D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
         return jsonify({"error": e.codigo, "detalle": e.detalle}), 422
+    except Exception as e:
+        D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
+        current_app.logger.exception("no se pudo preparar el archivo de subida")
+        return jsonify({"error": "no_se_pudo_preparar",
+                        "detalle": f"El servidor no pudo abrir el archivo: "
+                                   f"{str(e)[:200]}"}), 500
 
     auditar("subida_iniciada", "grabacion", gid,
             f"{int(d.get('bytes') or 0) // (1024*1024)} MB")
@@ -1506,17 +1519,11 @@ def subir_terminar(gid):
         return jsonify({"error": "sin_audio",
                         "detalle": "El video no trae pista de audio."}), 422
 
-    carpeta = tempfile.mkdtemp(prefix="entrev_")
-    ruta_audio = os.path.join(carpeta, "voz.m4a")
-    try:
-        V.extraer_audio(ruta, ruta_audio)
-    except Exception as e:
-        SUB.cancelar(gid)
-        return jsonify({"error": "no_se_pudo_extraer", "detalle": str(e)[:200]}), 422
-
-    D.execute("UPDATE grabaciones SET duracion=?, audio_bytes=?, ruta_video=NULL "
-              "WHERE id=?",
-              (int(datos["segundos"]), os.path.getsize(ruta_audio), gid))
+    # La voz se saca en segundo plano: con seis gigas, ffmpeg tarda más de
+    # los 120 segundos que gunicorn le da a una petición, y el trabajador
+    # moría a medio camino dejando la entrevista colgada.
+    D.execute("UPDATE grabaciones SET duracion=?, ruta_video=NULL WHERE id=?",
+              (int(datos["segundos"]), gid))
 
     contexto = ""
     if g["procesoId"]:
@@ -1527,7 +1534,7 @@ def subir_terminar(gid):
 
     # El video se procesa y se borra en el mismo paso: lo que vale son los
     # 28 MB de voz y las pocas imágenes, no los seis gigas.
-    E.procesar_en_segundo_plano(gid, ruta_audio, ruta, contexto)
+    E.desde_video_en_segundo_plano(gid, ruta, contexto)
     auditar("subida_terminada", "grabacion", gid,
             f"{int(datos['segundos'])//60} min")
     return jsonify({"ok": True, "grabacion": E.leer(gid)})

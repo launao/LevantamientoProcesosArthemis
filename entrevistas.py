@@ -240,6 +240,37 @@ def procesar_en_segundo_plano(gid, ruta_audio, ruta_video=None, contexto=""):
     return h
 
 
+def desde_video_en_segundo_plano(gid, ruta_video, contexto=""):
+    """Saca la voz del video y sigue, todo fuera de la petición.
+
+    Sacarle la voz a seis gigas tarda minutos, y gunicorn mata al
+    trabajador que lleve más de dos atendiendo una petición. Hecho aquí
+    dentro, el navegador recibe su respuesta enseguida y el trabajo largo
+    sigue por su cuenta.
+    """
+    def trabajo():
+        import tempfile
+        import videos as V
+        carpeta = tempfile.mkdtemp(prefix="entrev_")
+        ruta_audio = os.path.join(carpeta, "voz.m4a")
+        try:
+            V.extraer_audio(ruta_video, ruta_audio)
+        except Exception as e:
+            _marcar(gid, "error", error=f"no_se_pudo_extraer: {str(e)[:300]}")
+            try:
+                os.remove(ruta_video)
+            except OSError:
+                pass
+            return
+        D.execute("UPDATE grabaciones SET audio_bytes=? WHERE id=?",
+                  (os.path.getsize(ruta_audio), gid))
+        _con_limpieza(gid, ruta_audio, ruta_video, contexto)
+
+    h = threading.Thread(target=trabajo, daemon=True)
+    h.start()
+    return h
+
+
 def _con_limpieza(gid, ruta_audio, ruta_video, contexto):
     try:
         procesar(gid, ruta_audio, ruta_video, contexto)

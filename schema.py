@@ -18,6 +18,8 @@ def _ddl():
     ts = "TIMESTAMPTZ DEFAULT NOW()" if pg else "TEXT DEFAULT CURRENT_TIMESTAMP"
     blob = "BYTEA" if pg else "BLOB"
     intt = "INTEGER"
+    # Para tamaños de video: el INTEGER de PostgreSQL se queda en 2,1 GB.
+    bigt = "BIGINT"
     boolt = "BOOLEAN DEFAULT TRUE" if pg else "INTEGER DEFAULT 1"
 
     return [
@@ -65,7 +67,7 @@ def _ddl():
               id           {txt} PRIMARY KEY,
               proceso_id   {txt},
               content_type {txt} NOT NULL,
-              tamano       {intt} DEFAULT 0,
+              tamano       {bigt} DEFAULT 0,
               nombre       {txt},
               data         {blob},
               ruta         {txt},
@@ -148,8 +150,8 @@ def _ddl():
               momentos     {txt},
               error        {txt},
               subido_por   {txt},
-              origen_bytes {intt} DEFAULT 0,
-              audio_bytes  {intt} DEFAULT 0,
+              origen_bytes {bigt} DEFAULT 0,
+              audio_bytes  {bigt} DEFAULT 0,
               creado       {ts},
               actualizado  {ts}
             )""",
@@ -252,8 +254,13 @@ COLUMNAS_NUEVAS = [
     ("procesos", "nota_vista", "TEXT"),
     ("procesos", "sesiones", "TEXT"),
     ("grabaciones", "ruta_video", "TEXT"),
-    ("grabaciones", "recibidos", "INTEGER DEFAULT 0"),
-    ("grabaciones", "esperados", "INTEGER DEFAULT 0"),
+    # BIGINT, no INTEGER: en PostgreSQL un INTEGER llega a 2.147.483.647,
+    # que son 2,1 GB. Un video de dos horas pesa seis. Guardar su tamaño
+    # reventaba el servidor con «integer out of range», y la app solo
+    # alcanzaba a decir «no se pudo empezar la subida». En SQLite los
+    # enteros son de 64 bits, así que esto no se ve probando en local.
+    ("grabaciones", "recibidos", "BIGINT DEFAULT 0"),
+    ("grabaciones", "esperados", "BIGINT DEFAULT 0"),
     # Estar relacionada con un proceso y haber entrado en él son dos cosas
     # distintas: lo primero se escoge al subir el video, lo segundo pasa
     # cuando alguien ya revisó y aprieta «Pasar al proceso». Mezclarlas
@@ -271,6 +278,35 @@ def _migrar_columnas():
             print(f"[schema] columna añadida: {tabla}.{col}")
         except Exception:
             pass  # ya existe
+
+
+# Columnas que guardan un tamaño en bytes de algo que puede ser un video.
+# Tienen que ser de 64 bits: un INTEGER de PostgreSQL se queda en 2,1 GB.
+CONTADORES_GRANDES = [
+    ("grabaciones", "origen_bytes"),
+    ("grabaciones", "audio_bytes"),
+    ("grabaciones", "recibidos"),
+    ("grabaciones", "esperados"),
+    ("media", "tamano"),
+]
+
+
+def _agrandar_enteros():
+    """Pasa a BIGINT las columnas de bytes que nacieron INTEGER.
+
+    Hace falta porque las bases que ya están desplegadas tienen la columna
+    creada como INTEGER: cambiar el CREATE TABLE no arregla lo que ya
+    existe. En SQLite no se hace nada —sus enteros ya son de 64 bits y no
+    existe ALTER COLUMN TYPE—.
+    """
+    if not getattr(D, "USE_PG", False):
+        return
+    for tabla, col in CONTADORES_GRANDES:
+        try:
+            D.execute(f"ALTER TABLE {tabla} ALTER COLUMN {col} TYPE BIGINT")
+            print(f"[schema] {tabla}.{col} ahora aguanta videos grandes")
+        except Exception:
+            pass  # ya era BIGINT, o la tabla no existe todavía
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -533,6 +569,7 @@ def init_db():
         cur.close()
 
     _migrar_columnas()
+    _agrandar_enteros()
 
     fila = D.row("SELECT data FROM config WHERE id=1")
     if not fila:
