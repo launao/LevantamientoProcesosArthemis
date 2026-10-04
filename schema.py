@@ -251,6 +251,9 @@ COLUMNAS_NUEVAS = [
     ("procesos", "fecha_cita", "TEXT"),
     ("procesos", "nota_vista", "TEXT"),
     ("procesos", "sesiones", "TEXT"),
+    ("grabaciones", "ruta_video", "TEXT"),
+    ("grabaciones", "recibidos", "INTEGER DEFAULT 0"),
+    ("grabaciones", "esperados", "INTEGER DEFAULT 0"),
 ]
 
 

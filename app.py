@@ -5,9 +5,10 @@ Local:      python app.py
 Railway:    gunicorn app:app   (ver Procfile)
 """
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from flask import Flask, render_template, redirect, url_for, jsonify, Response
+from flask import (Flask, render_template, redirect, url_for, jsonify,
+                   request, Response)
 
 try:  # .env solo en desarrollo
     from dotenv import load_dotenv
@@ -110,6 +111,59 @@ def crear_app():
                          for ch in (datos["proceso"]["nombre"] or "informe"))[:60].strip()
         return Response(html, mimetype="text/html; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="{nombre or "informe"}.html"'})
+
+    @app.get("/descargar/preparar-entrevistas.zip")
+    def bajar_preparador():
+        """El programa que saca la voz de los videos, listo para doble clic.
+
+        Va dentro de un zip por una razón concreta: un archivo bajado del
+        navegador llega sin permiso de ejecución, y en Mac un .command sin
+        ese permiso no abre —solo dice que no se puede—. El zip sí lo
+        conserva, así que al descomprimirlo ya funciona.
+
+        De paso se le inyecta la dirección de este servidor, para que
+        nadie tenga que configurar nada ni se quede apuntando a otro lado
+        si algún día cambia el dominio.
+        """
+        import io
+        import zipfile
+
+        ruta = os.path.join(app.static_folder, "preparar-entrevistas.command")
+        if not os.path.exists(ruta):
+            return jsonify({"error": "no_existe"}), 404
+
+        with open(ruta, "r", encoding="utf-8") as fh:
+            guion = fh.read()
+        base = request.host_url.rstrip("/")
+        guion = guion.replace(
+            'APP="${LP_URL:-https://web-production-06eb4.up.railway.app}"',
+            f'APP="${{LP_URL:-{base}}}"')
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            info = zipfile.ZipInfo("Preparar entrevistas.command")
+            info.external_attr = 0o755 << 16        # el permiso de ejecución
+            info.date_time = datetime.now().timetuple()[:6]
+            z.writestr(info, guion)
+
+            lea = (
+                "PREPARAR ENTREVISTAS GRABADAS\n"
+                "=============================\n\n"
+                "1. Haz doble clic en «Preparar entrevistas.command».\n\n"
+                "   La primera vez, el Mac va a decir que no puede abrirlo porque\n"
+                "   viene de internet. Entonces: clic derecho sobre el archivo →\n"
+                "   Abrir → Abrir. Eso pasa una sola vez.\n\n"
+                "2. Te va a pedir el usuario y la contraseña de la app.\n"
+                "   Los mismos de siempre.\n\n"
+                "3. Arrastra los videos a la ventana y presiona Enter.\n\n"
+                "El programa saca la voz de cada video y la manda a la app.\n"
+                "Tus videos no se mueven ni se borran: siguen donde estaban.\n\n"
+                f"La app está en: {base}\n")
+            z.writestr("LÉEME.txt", lea)
+
+        buf.seek(0)
+        return Response(buf.read(), mimetype="application/zip", headers={
+            "Content-Disposition": 'attachment; filename="Preparar entrevistas.zip"'})
 
     @app.get("/doc/<did>/descargar")
     def descargar_documento(did):

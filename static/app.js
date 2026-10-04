@@ -5907,6 +5907,7 @@ function traducirError(e) {
    ver el video.
    ═══════════════════════════════════════════════════════════════ */
 const ESTADOS_GRAB = {
+  subiendo:       { n: 'A medio subir',  c: 'en_revision', ayuda: 'El video no llegó completo. Vuelve a escoger el mismo archivo y sigue donde iba.' },
   subida:         { n: 'Recibida',       c: 'pendiente',   ayuda: 'Esperando turno.' },
   transcribiendo: { n: 'Pasando a texto', c: 'en_curso',   ayuda: 'Escuchando la grabación. Esto es lo que más tarda.' },
   analizando:     { n: 'Entendiendo',    c: 'en_curso',    ayuda: 'Armando el paso a paso de lo que oyó.' },
@@ -5928,13 +5929,16 @@ async function vistaEntrevistas(m) {
   m.innerHTML = `
   <div class="topbar"><h1>Entrevistas grabadas</h1><div class="sp"></div>
     <span class="tiny">${gs.length}</span>
-    <button class="btn p" id="comoSubir">Cómo subir una</button></div>
+    <button class="btn" id="comoSubir">Atajo para Mac</button>
+    <button class="btn p" id="subirAqui">⤒ Subir un video</button></div>
 
   <div class="banner">
-    Graba la entrevista con el celular como siempre. Después, el programa saca
-    la voz del video y la manda acá: la app arma el paso a paso y saca sola las
-    fotos de los momentos que importan. <b>El video no se sube</b> — pesa cien
-    veces más que la voz y se queda en tu computador.
+    Graba la entrevista con el celular como siempre. Después súbela de una de dos
+    formas: <b>desde aquí mismo</b> —sirve en el celular Android, la tablet,
+    Windows o Mac, y si se corta el wifi sigue donde iba— o, <b>si estás en
+    Mac</b>, con el atajo, que saca la voz antes de mandarla y tarda un minuto
+    en vez de media hora. La app arma el paso a paso y saca sola las fotos de
+    los momentos que importan.
   </div>
 
   ${gs.length ? `<div class="grabaciones">${gs.map(g => tarjetaGrabacion(g)).join('')}</div>`
@@ -5943,8 +5947,11 @@ async function vistaEntrevistas(m) {
         <span class="tiny">Usa el botón de arriba para ver cómo subirlas.</span></div>`}`;
 
   document.getElementById('comoSubir').onclick = modalComoSubir;
+  document.getElementById('subirAqui').onclick = () => modalSubirVideo();
   m.querySelectorAll('[data-vergrab]').forEach(b =>
     b.onclick = () => abrirGrabacion(b.dataset.vergrab));
+  m.querySelectorAll('[data-retomar]').forEach(b => b.onclick = () =>
+    modalRetomarSubida(gs.find(g => g.id === b.dataset.retomar)));
   m.querySelectorAll('[data-borrargrab]').forEach(b => b.onclick = async () => {
     if (!confirm('Se borra lo que la app entendió de esta entrevista. El video tuyo no se toca. ¿Seguir?')) return;
     await api('/grabaciones/' + b.dataset.borrargrab, { method: 'DELETE' });
@@ -5963,6 +5970,29 @@ function tarjetaGrabacion(g) {
   const e = ESTADOS_GRAB[g.estado] || ESTADOS_GRAB.subida;
   const trabajando = ['subida', 'transcribiendo', 'analizando', 'imagenes'].includes(g.estado);
   const a = g.analisis || {};
+
+  // Un video a medio llegar no es una entrevista: es una subida que hay
+  // que terminar. Se muestra cuánto falta y el botón para seguir.
+  if (g.estado === 'subiendo') {
+    const pc = g.esperados ? Math.min(99, Math.round(g.recibidos / g.esperados * 100)) : 0;
+    const faltanMb = Math.max(0, Math.round((g.esperados - g.recibidos) / 1048576));
+    return `<div class="grab-card subiendo">
+      <div class="flex" style="align-items:flex-start;gap:12px">
+        <div style="flex:1;min-width:0">
+          <b class="grab-nom">${esc(g.nombre)}</b>
+          <div class="tiny">Empezada ${esc(fechaLarga(g.creado))}</div>
+        </div>
+        <span class="pill ${e.c}">${e.n}</span>
+      </div>
+      <div class="sv-barra" style="margin-top:12px"><i style="width:${pc}%"></i></div>
+      <div class="tiny" style="margin-top:8px">Llegó el ${pc}% · faltan unos ${faltanMb} MB</div>
+      <div class="tiny" style="margin-top:6px">${esc(e.ayuda)}</div>
+      <div class="flex wrap" style="gap:9px;margin-top:12px">
+        <button class="btn p" data-retomar="${g.id}">⤒ Seguir subiendo</button>
+        <button class="btn sm danger right" data-borrargrab="${g.id}">Descartar</button>
+      </div>
+    </div>`;
+  }
 
   return `<div class="grab-card ${g.estado}">
     <div class="flex" style="align-items:flex-start;gap:12px">
@@ -6008,9 +6038,16 @@ function traducirErrorGrab(e) {
 }
 
 function modalComoSubir() {
-  modal(`<h3>Cómo subir una entrevista</h3>
+  modal(`<h3>El atajo para Mac</h3>
     <p class="mut" style="margin-top:-6px">
-      Se hace una vez y queda listo para siempre.</p>
+      Hace lo mismo que «Subir un video», pero en un minuto en vez de media
+      hora. Se instala una vez y queda listo para siempre.</p>
+
+    <div class="aviso-ia">
+      <b>Solo funciona en Mac.</b> En Windows, en el celular o en la tablet,
+      usa <b>⤒ Subir un video</b>: sube el video entero, tarda más pero el
+      resultado es el mismo.
+    </div>
 
     <div class="pasos-subir">
       <div class="ps"><span class="ps-n">1</span>
@@ -6020,30 +6057,37 @@ function modalComoSubir() {
 
       <div class="ps"><span class="ps-n">2</span>
         <div><b>Baja el programa, una sola vez</b>
-          <div class="tiny">Es un archivo. Guárdalo en el Escritorio.</div>
-          <a class="btn sm" href="/static/preparar-entrevistas.command"
-             download="preparar-entrevistas.command" style="margin-top:7px">⤓ Bajar el programa</a>
-          <div class="tiny" style="margin-top:7px">
-            La primera vez, Mac pregunta si confías en el archivo:
-            <b>clic derecho sobre él → Abrir → Abrir</b>. Solo la primera vez.</div></div></div>
+          <div class="tiny">Llega un archivo comprimido. Haz doble clic para abrirlo
+            y arrastra lo que sale al Escritorio.</div>
+          <a class="btn p" href="/descargar/preparar-entrevistas.zip" style="margin-top:9px">
+            ⤓ Bajar «Preparar entrevistas»</a>
+          <div class="tiny" style="margin-top:9px">
+            Viene con la dirección de la app ya puesta: no hay nada que configurar.</div></div></div>
 
       <div class="ps"><span class="ps-n">3</span>
-        <div><b>Doble clic y arrastra los videos</b>
-          <div class="tiny">Se abre una ventana negra. Arrastra ahí los videos
-            —puedes soltar varios a la vez— y presiona Enter.</div></div></div>
+        <div><b>Ábrelo la primera vez con clic derecho</b>
+          <div class="tiny">El Mac va a decir que no puede abrirlo porque viene de
+            internet. Entonces: <b>clic derecho sobre el archivo → Abrir → Abrir</b>.
+            Pasa una sola vez; de ahí en adelante es doble clic normal.</div></div></div>
 
       <div class="ps"><span class="ps-n">4</span>
+        <div><b>Arrastra los videos a la ventana</b>
+          <div class="tiny">Se abre una ventana negra que pide el usuario y la
+            contraseña de la app. Después, arrastra ahí los videos —puedes soltar
+            varios a la vez— y presiona Enter.</div></div></div>
+
+      <div class="ps"><span class="ps-n">5</span>
         <div><b>Listo</b>
           <div class="tiny">El programa saca la voz y la manda. Tus videos no
             se mueven ni se borran. En unos minutos aparece el paso a paso aquí.</div></div></div>
     </div>
 
     <div class="aviso-ia" style="margin-top:16px">
-      <b>¿Por qué no se sube el video?</b><br>
-      Una grabación de dos horas pesa unos 6 GB; su voz, 28 MB. Subir el video
-      tomaría una hora y no agregaría nada: lo que hace falta es lo que la persona
-      explicó, y las pocas imágenes de los momentos que valen la pena, que el
-      programa saca después.
+      <b>¿Por qué es tanto más rápido?</b><br>
+      Una grabación de dos horas pesa unos 6 GB; su voz, 28 MB. El programa saca
+      la voz en el computador y manda solo eso. Subir el video entero funciona
+      igual —y es lo que pasa cuando usas «Subir un video»—, pero son 6 GB
+      viajando por el wifi en vez de 28 MB.
     </div>
 
     <div class="flex" style="margin-top:16px"><button class="btn right" data-cerrar>Cerrar</button></div>`);
@@ -6440,4 +6484,284 @@ function modalEditarPasos(gid, g, cajaPadre) {
       } catch (_) { toast('No se pudo guardar'); }
     };
   });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Subir una entrevista desde el navegador
+
+   Funciona igual en el celular Android, en el iPhone, en Mac y en
+   Windows, porque lo único que hay en todos es un navegador.
+
+   El video va por trozos de cinco megas. Antes de cada trozo se le
+   pregunta al servidor cuántos bytes tiene, así que se puede perder el
+   wifi, cerrar la pestaña o quedarse sin batería: al volver sigue donde
+   iba en vez de empezar de nuevo.
+   ═══════════════════════════════════════════════════════════════ */
+const SUBIDA = { activa: null };
+
+function modalSubirVideo(procesoId) {
+  const procesos = S.procesos.filter(p =>
+    puedeEditar() && (esAdmin() || p.responsable === S.yo.id));
+
+  modal(`<h3>Subir una entrevista</h3>
+    <p class="mut" style="margin-top:-6px">
+      Desde el celular, la tablet o el computador. Si se corta la conexión,
+      sigue sola donde iba.</p>
+
+    <label class="f"><span class="lbl">¿De qué proceso es?</span>
+      <select id="svProceso">
+        <option value="">Todavía no sé / lo decido después</option>
+        ${procesos.map(p => `<option value="${p.id}" ${p.id === procesoId ? 'selected' : ''}>
+          ${esc(p.nombre)}</option>`).join('')}
+      </select></label>
+
+    <label class="f"><span class="lbl">El video de la entrevista</span>
+      <span class="hint">Puede ser de hasta dos horas. No se guarda en el servidor:
+        se le saca la voz y se borra.</span>
+      <input type="file" id="svArchivo" accept="video/*,.mp4,.mov,.m4v,.avi,.mkv"></label>
+
+    <div id="svInfo"></div>
+    <div id="svProgreso" class="oculto">
+      <div class="sv-barra"><i id="svBarra" style="width:0%"></i></div>
+      <div class="flex" style="margin-top:8px">
+        <span class="tiny" id="svTexto">Preparando…</span>
+        <button class="btn sm right" id="svCancelar">Cancelar</button>
+      </div>
+      <div class="aviso-ia" style="margin-top:12px">
+        Puedes dejar esta pantalla abierta e ir haciendo otra cosa.
+        Si cierras, la subida se pausa y puedes retomarla.
+      </div>
+    </div>
+
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" data-cerrar>Cerrar</button>
+      <button class="btn p right" id="svEmpezar" disabled>Subir</button>
+    </div>`, box => {
+
+    const archivo = box.querySelector('#svArchivo');
+    const info = box.querySelector('#svInfo');
+    const empezar = box.querySelector('#svEmpezar');
+
+    archivo.onchange = () => {
+      const f = archivo.files[0];
+      if (!f) { info.innerHTML = ''; empezar.disabled = true; return; }
+      const mb = f.size / 1048576;
+      const lento = mb / (25 / 8) / 60;      // minutos a 25 Mbps
+      info.innerHTML = `<div class="aviso-ia">
+        <b>${esc(f.name)}</b><br>
+        ${mb > 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'} ·
+        por wifi normal tardaría unos ${Math.max(1, Math.round(lento))} min.
+        ${mb > 6000 ? '<br><b>Es muy pesado.</b> Si graban en 4K, bajen a 1080p: para una entrevista se ve igual y pesa la tercera parte.' : ''}
+      </div>`;
+      empezar.disabled = false;
+    };
+
+    empezar.onclick = async () => {
+      const f = archivo.files[0];
+      if (!f) return;
+      empezar.disabled = true;
+      archivo.disabled = true;
+      box.querySelector('#svProgreso').classList.remove('oculto');
+      await subirVideo(f, box.querySelector('#svProceso').value, box);
+    };
+
+    box.querySelector('#svCancelar').onclick = async () => {
+      if (!confirm('Se pierde lo que se ha subido. ¿Cancelar?')) return;
+      SUBIDA.activa = null;
+      const gid = box.dataset.gid;
+      if (gid) { try { await api('/grabaciones/' + gid + '/subir', { method: 'DELETE' }); } catch (_) {} }
+      cerrarModal();
+    };
+  });
+}
+
+/* Retomar una subida que se cortó.
+
+   El navegador no puede guardar un archivo de seis gigas, así que hay que
+   volver a escogerlo. Lo que sí se guarda es cuánto llegó: se comprueba
+   que sea el mismo archivo por el tamaño y se sigue desde ahí. */
+function modalRetomarSubida(g) {
+  if (!g) return;
+  const faltan = Math.round((g.esperados - g.recibidos) / 1048576);
+  modal(`<h3>Seguir subiendo</h3>
+    <p class="mut" style="margin-top:-6px">
+      De <b>${esc(g.nombre)}</b> ya llegaron
+      ${Math.round(g.recibidos / 1048576)} MB. Faltan unos ${faltan} MB.</p>
+
+    <label class="f"><span class="lbl">Escoge otra vez el mismo video</span>
+      <span class="hint">Tiene que ser el mismo archivo: si es otro, el video
+        quedaría pegado a medias y no se podría ver.</span>
+      <input type="file" id="rsArchivo" accept="video/*,.mp4,.mov,.m4v,.avi,.mkv"></label>
+
+    <div id="rsInfo"></div>
+    <div id="svProgreso" class="oculto">
+      <div class="sv-barra"><i id="svBarra" style="width:${
+        g.esperados ? Math.round(g.recibidos / g.esperados * 100) : 0}%"></i></div>
+      <div class="flex" style="margin-top:8px">
+        <span class="tiny" id="svTexto">Reanudando…</span>
+      </div>
+    </div>
+
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" data-cerrar>Cerrar</button>
+      <button class="btn p right" id="rsSeguir" disabled>Seguir</button>
+    </div>`, box => {
+
+    const archivo = box.querySelector('#rsArchivo');
+    const info = box.querySelector('#rsInfo');
+    const seguir = box.querySelector('#rsSeguir');
+    box.dataset.gid = g.id;
+
+    archivo.onchange = () => {
+      const f = archivo.files[0];
+      if (!f) { info.innerHTML = ''; seguir.disabled = true; return; }
+      if (g.esperados && f.size !== g.esperados) {
+        info.innerHTML = `<div class="aviso-ia error">
+          Este archivo pesa ${Math.round(f.size / 1048576)} MB y el que se empezó
+          a subir pesaba ${Math.round(g.esperados / 1048576)} MB. No es el mismo.
+          Busca el original, o descarta esta subida y empieza de nuevo.</div>`;
+        seguir.disabled = true;
+        return;
+      }
+      info.innerHTML = `<div class="aviso-ia">Es el mismo archivo. Sigue desde
+        los ${Math.round(g.recibidos / 1048576)} MB que ya llegaron.</div>`;
+      seguir.disabled = false;
+    };
+
+    seguir.onclick = async () => {
+      const f = archivo.files[0];
+      if (!f) return;
+      seguir.disabled = true;
+      archivo.disabled = true;
+      box.querySelector('#svProgreso').classList.remove('oculto');
+      // Se vuelve a preguntar antes de seguir: el contador puede haber
+      // cambiado si alguien retomó desde otro aparato.
+      let desde = g.recibidos;
+      try {
+        const est = await api(`/grabaciones/${g.id}/subir`);
+        desde = est.recibidos || 0;
+      } catch (_) {}
+      await bucleSubida(f, g.id, 5 * 1024 * 1024, desde, box);
+    };
+  });
+}
+
+
+async function subirVideo(archivo, procesoId, box) {
+  const texto = box.querySelector('#svTexto');
+  const decir = (t) => { if (texto) texto.textContent = t; };
+
+  let gid, trozo;
+  try {
+    const r = await api('/grabaciones/subir/iniciar', { method: 'POST', body: {
+      nombre: archivo.name, bytes: archivo.size, proceso: procesoId || '' }});
+    gid = r.id; trozo = r.trozo || 5 * 1024 * 1024;
+    box.dataset.gid = gid;
+  } catch (e) {
+    const c = (e.data && e.data.error) || '';
+    decir({
+      sin_llave_voz: 'Falta configurar el servicio de voz. Avísale a la coordinación.',
+      video_muy_grande: (e.data && e.data.detalle) || 'El video es muy pesado.',
+      sin_espacio: (e.data && e.data.detalle) || 'No hay espacio ahora mismo.'
+    }[c] || 'No se pudo empezar la subida.');
+    return;
+  }
+
+  return bucleSubida(archivo, gid, trozo, 0, box);
+}
+
+
+/* El bucle que manda los trozos. Lo usan tanto la subida nueva como la
+   que se retoma, para que no haya dos versiones que se desincronicen. */
+async function bucleSubida(archivo, gid, trozo, desde, box) {
+  const barra = box.querySelector('#svBarra');
+  const texto = box.querySelector('#svTexto');
+  const decir = (t) => { if (texto) texto.textContent = t; };
+  const avanzar = (hechos, total) => {
+    const pc = total ? Math.min(100, hechos / total * 100) : 0;
+    if (barra) barra.style.width = pc.toFixed(1) + '%';
+  };
+
+  SUBIDA.activa = gid;
+  let fallos = 0;
+  let desfases = 0;
+  const t0 = Date.now();
+  const yaEstaba = desde;
+  avanzar(desde, archivo.size);
+
+  while (desde < archivo.size) {
+    if (SUBIDA.activa !== gid) { decir('Cancelada.'); return; }
+
+    const fin = Math.min(desde + trozo, archivo.size);
+    try {
+      const r = await fetch(`/api/grabaciones/${gid}/subir`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'X-Desde': String(desde), 'Content-Type': 'application/octet-stream' },
+        body: archivo.slice(desde, fin)
+      });
+
+      if (r.status === 409) {
+        // El servidor ya tenía más de lo que creíamos: se retoma desde ahí.
+        // Si eso pasa muchas veces seguidas, algo no cuadra y seguir
+        // insistiendo solo da vueltas.
+        const d = await r.json();
+        if (++desfases > 5) {
+          decir('La subida se desacomodó. Descártala y empieza de nuevo.');
+          SUBIDA.activa = null;
+          return;
+        }
+        desde = d.recibidos || 0;
+        continue;
+      }
+      if (!r.ok) throw new Error('http_' + r.status);
+
+      const d = await r.json();
+      if (!(d.recibidos > desde)) throw new Error('no_avanza');
+      desde = d.recibidos;
+      fallos = 0;
+      desfases = 0;
+      avanzar(desde, archivo.size);
+
+      // La velocidad se mide sobre lo de esta sesión, no sobre el total:
+      // contar lo que llegó ayer daría una cuenta sin sentido.
+      const seg = (Date.now() - t0) / 1000;
+      const mbps = (desde - yaEstaba) / 1048576 / Math.max(1, seg);
+      const faltan = (archivo.size - desde) / 1048576 / Math.max(0.1, mbps) / 60;
+      decir(`${Math.round(desde / 1048576)} de ${Math.round(archivo.size / 1048576)} MB`
+            + (faltan > 0.5 ? ` · faltan unos ${Math.ceil(faltan)} min` : ' · casi'));
+
+    } catch (_) {
+      fallos++;
+      if (fallos > 8) {
+        decir('Se perdió la conexión. Lo que llegó queda guardado: entra a '
+              + 'Entrevistas y dale «Seguir subiendo» cuando vuelva el wifi.');
+        SUBIDA.activa = null;
+        return;
+      }
+      // Se espera cada vez un poco más: si el wifi se cayó, insistir cada
+      // segundo no lo trae de vuelta y sí gasta batería.
+      decir(`Sin conexión. Reintentando… (${fallos})`);
+      await new Promise(r => setTimeout(r, Math.min(30000, 2000 * fallos)));
+      try {
+        const est = await api(`/grabaciones/${gid}/subir`);
+        desde = est.recibidos || desde;
+      } catch (__) {}
+    }
+  }
+
+  decir('Sacando la voz del video…');
+  avanzar(1, 1);
+  try {
+    await api(`/grabaciones/${gid}/subir/terminar`, { method: 'POST' });
+    decir('Listo. La app la está analizando.');
+    setTimeout(() => { cerrarModal(); S.vista = 'entrevistas'; irA('entrevistas'); render(); }, 1200);
+  } catch (e) {
+    const c = (e.data && e.data.error) || '';
+    decir({
+      sin_audio: 'El video no trae audio. Sin voz no hay nada que transcribir.',
+      video_ilegible: 'El archivo llegó incompleto. Vuelve a subirlo.',
+      no_se_pudo_extraer: 'No se pudo leer el video.'
+    }[c] || 'No se pudo terminar.');
+  }
+  SUBIDA.activa = null;
 }

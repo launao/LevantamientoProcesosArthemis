@@ -28,7 +28,13 @@ import videos as V
 # entre 8 y 20; el tope deja margen sin que el costo se dispare.
 MAX_MOMENTOS = 22
 
-ESTADOS = ("subida", "transcribiendo", "analizando", "imagenes", "listo", "error")
+# "subiendo" es el video que va llegando por trozos y todavía no está
+# completo. Es un estado aparte de "subida" a propósito: en uno hay que
+# esperar a que la app trabaje, en el otro hay que volver a escoger el
+# archivo para que siga. Confundirlos hacía que un video a medio llegar
+# apareciera como recibido.
+ESTADOS = ("subiendo", "subida", "transcribiendo", "analizando", "imagenes",
+           "listo", "error")
 
 
 def _ahora():
@@ -58,6 +64,9 @@ def leer(gid):
         "momentos": D.jload(f["momentos"], []),
         "error": f["error"] or "", "subidoPor": f["subido_por"] or "",
         "origenBytes": f["origen_bytes"] or 0, "audioBytes": f["audio_bytes"] or 0,
+        # Para poder retomar una subida que se cortó: cuánto pesa el video
+        # y cuánto llegó. Sin esto no hay forma de seguir desde donde iba.
+        "esperados": f["esperados"] or 0, "recibidos": f["recibidos"] or 0,
         "creado": str(f["creado"]), "actualizado": str(f["actualizado"] or ""),
     }
 

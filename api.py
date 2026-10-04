@@ -20,7 +20,9 @@ import db as D
 import documentos as Doc
 import entrevistas as E
 import flujo as F
+import videos as V
 import ia
+import subidas as SUB
 import transcribir as TR
 from sanitizar import limpiar_respuestas, a_texto_plano, limpiar_html
 from auth import (usuario_actual, iniciar_sesion, cerrar_sesion, login_required,
@@ -1396,6 +1398,155 @@ def subir_grabacion():
                     "grabacion": E.leer(gid)})
 
 
+@api.post("/grabaciones/subir/iniciar")
+@puede_editar
+def subir_iniciar():
+    """Abre una subida por trozos. Funciona desde cualquier navegador."""
+    d = request.get_json(silent=True) or {}
+    u = usuario_actual()
+
+    pid = (d.get("proceso") or "").strip() or None
+    if pid:
+        p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+        if not p:
+            return jsonify({"error": "proceso_no_existe"}), 404
+        if not _mio(p, u):
+            return jsonify({"error": "no_es_tuyo"}), 403
+
+    if not TR.proveedor_activo():
+        return jsonify({"error": "sin_llave_voz"}), 422
+
+    SUB.limpiar_viejas()
+    gid = E.crear(d.get("nombre") or "entrevista", pid, u["id"],
+                  int(d.get("duracion") or 0), int(d.get("bytes") or 0), 0)
+    try:
+        info = SUB.iniciar(gid, d.get("nombre") or "", d.get("bytes") or 0)
+    except SUB.SubidaError as e:
+        D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
+        return jsonify({"error": e.codigo, "detalle": e.detalle}), 422
+
+    auditar("subida_iniciada", "grabacion", gid,
+            f"{int(d.get('bytes') or 0) // (1024*1024)} MB")
+    return jsonify({"ok": True, "id": gid, **info})
+
+
+@api.get("/grabaciones/<gid>/subir")
+@puede_editar
+def subir_estado(gid):
+    """Cuántos bytes hay ya: con esto el navegador sabe desde dónde seguir."""
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+    est = SUB.estado(gid)
+    if not est:
+        return jsonify({"error": "no_existe"}), 404
+    return jsonify(est)
+
+
+@api.post("/grabaciones/<gid>/subir")
+@puede_editar
+def subir_trozo(gid):
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+
+    datos = request.get_data()
+    if not datos:
+        return jsonify({"error": "trozo_vacio"}), 400
+
+    try:
+        desde = int(request.headers.get("X-Desde") or request.args.get("desde") or 0)
+        r = SUB.recibir_trozo(gid, desde, datos)
+    except SUB.SubidaError as e:
+        # El desfase no es un fallo: el navegador reintentó algo que ya
+        # había llegado. Se le dice dónde va de verdad y sigue solo.
+        if e.codigo == "desfasado":
+            est = SUB.estado(gid) or {}
+            return jsonify({"error": e.codigo, "detalle": e.detalle, **est}), 409
+        return jsonify({"error": e.codigo, "detalle": e.detalle}), 422
+    return jsonify({"ok": True, **r})
+
+
+@api.post("/grabaciones/<gid>/subir/terminar")
+@puede_editar
+def subir_terminar(gid):
+    """El video llegó completo: se le saca la voz y se manda a analizar."""
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+
+    f = D.row("SELECT ruta_video FROM grabaciones WHERE id=?", (gid,))
+    ruta = f["ruta_video"] if f else None
+    if not ruta or not os.path.exists(ruta):
+        return jsonify({"error": "sin_video"}), 422
+
+    try:
+        datos = V.info(ruta)
+    except Exception as e:
+        SUB.cancelar(gid)
+        D.execute("UPDATE grabaciones SET estado='error', error=? WHERE id=?",
+                  (f"video_ilegible: {e}", gid))
+        return jsonify({"error": "video_ilegible",
+                        "detalle": "El archivo llegó incompleto o el formato no se "
+                                   "puede leer. Vuelve a subirlo."}), 422
+
+    if not datos["tiene_audio"]:
+        SUB.cancelar(gid)
+        D.execute("UPDATE grabaciones SET estado='error', error=? WHERE id=?",
+                  ("sin_voz: el video no trae audio", gid))
+        return jsonify({"error": "sin_audio",
+                        "detalle": "El video no trae pista de audio."}), 422
+
+    carpeta = tempfile.mkdtemp(prefix="entrev_")
+    ruta_audio = os.path.join(carpeta, "voz.m4a")
+    try:
+        V.extraer_audio(ruta, ruta_audio)
+    except Exception as e:
+        SUB.cancelar(gid)
+        return jsonify({"error": "no_se_pudo_extraer", "detalle": str(e)[:200]}), 422
+
+    D.execute("UPDATE grabaciones SET duracion=?, audio_bytes=?, ruta_video=NULL "
+              "WHERE id=?",
+              (int(datos["segundos"]), os.path.getsize(ruta_audio), gid))
+
+    contexto = ""
+    if g["procesoId"]:
+        pr = D.row("SELECT nombre, area FROM procesos WHERE id=?", (g["procesoId"],))
+        if pr:
+            contexto = (f"La entrevista es sobre el proceso «{pr['nombre']}» "
+                        f"del área {pr['area'] or 'sin área'}.")
+
+    # El video se procesa y se borra en el mismo paso: lo que vale son los
+    # 28 MB de voz y las pocas imágenes, no los seis gigas.
+    E.procesar_en_segundo_plano(gid, ruta_audio, ruta, contexto)
+    auditar("subida_terminada", "grabacion", gid,
+            f"{int(datos['segundos'])//60} min")
+    return jsonify({"ok": True, "grabacion": E.leer(gid)})
+
+
+@api.delete("/grabaciones/<gid>/subir")
+@puede_editar
+def subir_cancelar(gid):
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+    SUB.cancelar(gid)
+    D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
+    return jsonify({"ok": True})
+
+
 @api.get("/grabaciones")
 @login_required
 def listar_grabaciones():
@@ -1483,6 +1634,10 @@ def borrar_grabacion(gid):
     u = usuario_actual()
     if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
         return jsonify({"error": "sin_permiso"}), 403
+    # Si era un video a medio subir, el pedazo sigue en el disco. Borrar
+    # la fila sin borrarlo dejaría los gigas ocupados sin que nada los
+    # reclame.
+    SUB.cancelar(gid)
     D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
     auditar("grabacion_borrada", "grabacion", gid)
     return jsonify({"ok": True})
