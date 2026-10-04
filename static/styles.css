@@ -1053,3 +1053,5 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
   display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex:none}
 .ep-cab input{flex:1}
 .ep-paso textarea{min-height:60px;font-size:15px;margin-bottom:8px}
+.caja-doc.recomendado{border-left:4px solid var(--ok);padding-left:12px;
+  background:color-mix(in srgb,var(--ok) 5%,transparent);border-radius:0 8px 8px 0;padding:12px}

@@ -100,7 +100,8 @@ def procesar(gid, ruta_audio, ruta_video=None, contexto=""):
         # ── 1. La voz ───────────────────────────────────────────────────
         _marcar(gid, "transcribiendo")
         datos = Path(ruta_audio).read_bytes()
-        segmentos, proveedor = TR.transcribir(datos, Path(ruta_audio).name)
+        segmentos, proveedor = TR.transcribir(
+            datos, Path(ruta_audio).name, ruta_audio=ruta_audio)
         D.execute("UPDATE grabaciones SET transcripcion=? WHERE id=?",
                   (D.jdump(segmentos), gid))
 

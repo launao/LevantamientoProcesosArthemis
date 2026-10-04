@@ -6230,10 +6230,11 @@ async function pintarConfigVoz() {
   ['openai', 'deepgram'].forEach(k => { e[k] = Object.assign({}, vacio, e[k] || {}); });
 
   const datos = {
+    deepgram: { n: 'Deepgram', donde: 'console.deepgram.com → API Keys',
+                recomendado: true,
+                nota: 'Recibe la entrevista completa sin partirla, separa quién pregunta de quién responde, y cuesta ~2.100 pesos por 2 horas. Dan 200 dólares de prueba al abrir la cuenta.' },
     openai: { n: 'OpenAI (Whisper)', donde: 'platform.openai.com → API keys',
-              nota: 'Entiende mejor el acento y los nombres propios. ~2.900 pesos por 2 h.' },
-    deepgram: { n: 'Deepgram', donde: 'console.deepgram.com',
-                nota: 'Más barato y más rápido, y separa quién habla. ~2.100 pesos por 2 h.' }
+              nota: 'Entiende un poco mejor los nombres propios, pero no recibe archivos de más de 25 MB: una entrevista de 2 h hay que partirla en trozos (la app lo hace sola). ~2.900 pesos por 2 horas.' }
   };
 
   caja.innerHTML = `
@@ -6242,9 +6243,10 @@ async function pintarConfigVoz() {
       : '<div class="aviso-ia">Sin llave no se pueden procesar entrevistas grabadas.</div>'}
 
     <div class="grid g2" style="margin-top:12px">
-      ${Object.entries(datos).map(([k, d]) => `<div class="caja-doc">
+      ${Object.entries(datos).map(([k, d]) => `<div class="caja-doc ${d.recomendado ? 'recomendado' : ''}">
         <b>${esc(d.n)}</b>
-        ${e[k].configurada ? `<span class="et impacto-alto">${esc(e[k].llave)}</span>` : ''}
+        ${d.recomendado ? '<span class="et impacto-alto">recomendado</span>' : ''}
+        ${e[k].configurada ? `<span class="et">${esc(e[k].llave)}</span>` : ''}
         <div class="tiny" style="margin:4px 0 8px">${esc(d.nota)}<br>Se saca en ${esc(d.donde)}</div>
         <input type="password" data-vozllave="${k}" placeholder="${e[k].configurada ? 'Reemplazar' : 'Pegar la llave'}"
           autocomplete="off" style="font-size:14px">
