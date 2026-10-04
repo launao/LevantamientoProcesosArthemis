@@ -786,6 +786,24 @@ Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor:
 }"""
 
 
+# Las fotos sueltas no vienen del video: las tomó la analista con el
+# celular mientras la persona explicaba. No hay un segundo que las ate a
+# un momento, así que lo único que las ubica es lo que se ve en ellas y
+# el orden en que se tomaron.
+SISTEMA_FOTOS_SUELTAS = SISTEMA_IMAGENES.replace(
+    "Aquí están esas imágenes, sacadas del video en los segundos que pediste.",
+    "Aquí están las fotos que tomó quien hizo la entrevista, con el celular, "
+    "mientras la persona explicaba. NO vienen del video y no traen minuto: "
+    "van numeradas en el orden en que se tomaron, que suele seguir el orden "
+    "del proceso, pero no siempre.\n\n"
+    "Tu trabajo más importante aquí es decir a qué paso pertenece cada foto. "
+    "Úsalo todo: lo que se lee en la foto, lo que la persona estaba "
+    "explicando, y el orden. Si una foto no corresponde a ningún paso que "
+    "reconstruiste, dilo en 'sin_valor' con el motivo; no la fuerces a un "
+    "paso cualquiera. Si dos fotos muestran lo mismo, quédate con la que se "
+    "lee mejor y manda la otra a 'sin_valor'.")
+
+
 def campos_para_llenar(plantilla):
     """Los campos de texto del formulario, para que Claude los conteste.
 
@@ -835,16 +853,19 @@ def analizar_entrevista(transcripcion, duracion_seg, contexto="", campos=None,
         "corte": ctx["stop_reason"]}
 
 
-def revisar_imagenes(analisis_previo, imagenes, modelo=None):
+def revisar_imagenes(analisis_previo, imagenes, modelo=None, sueltas=False):
     """Segunda pasada: las imágenes de los momentos pedidos.
 
     imagenes: [{"n": 1, "segundo": 872, "por_que": "...", "datos": bytes, "tipo": "image/jpeg"}]
+
+    Con sueltas=True son fotos que tomó la analista aparte, sin video:
+    no traen minuto y hay que ubicarlas por lo que se ve en ellas.
     """
     llave = leer_llave()
     if not llave:
         raise IAError("sin_llave")
     if not imagenes:
-        raise IAError("sin_imagenes", "No se pudo sacar ningún fotograma del video.")
+        raise IAError("sin_imagenes", "No hay ninguna imagen que mirar.")
 
     modelo = modelo or MODELO_DEFECTO
     resumen = json.dumps({k: analisis_previo.get(k) for k in
@@ -853,17 +874,25 @@ def revisar_imagenes(analisis_previo, imagenes, modelo=None):
 
     contenido = [{"type": "text", "text":
                   "Esto fue lo que entendiste oyendo la entrevista:\n\n" + resumen
-                  + "\n\nY estas son las imágenes que pediste:"}]
+                  + ("\n\nY estas son las fotos que tomaron durante la entrevista, "
+                     "numeradas en el orden en que se tomaron:" if sueltas
+                     else "\n\nY estas son las imágenes que pediste:")}]
     for img in imagenes:
-        contenido.append({"type": "text", "text":
-                          f"\nImagen {img['n']} — minuto {int(img['segundo']//60):02d}:"
-                          f"{int(img['segundo']%60):02d}. La pediste porque: {img.get('por_que','')}"})
+        if sueltas:
+            pie = f"\nFoto {img['n']} de {len(imagenes)}"
+            if img.get("nombre"):
+                pie += f" — el archivo se llama «{img['nombre']}»"
+        else:
+            seg = img.get("segundo") or 0
+            pie = (f"\nImagen {img['n']} — minuto {int(seg//60):02d}:{int(seg%60):02d}. "
+                   f"La pediste porque: {img.get('por_que','')}")
+        contenido.append({"type": "text", "text": pie})
         contenido.append({"type": "image", "source": {
             "type": "base64", "media_type": img.get("tipo", "image/jpeg"),
             "data": base64.b64encode(img["datos"]).decode("ascii")}})
 
     data = _pedir(llave, modelo, contenido, max_tokens=16000,
-                  sistema=SISTEMA_IMAGENES)
+                  sistema=SISTEMA_FOTOS_SUELTAS if sueltas else SISTEMA_IMAGENES)
     texto = "".join(b.get("text", "") for b in data.get("content", [])
                     if b.get("type") == "text")
     uso = data.get("usage", {})

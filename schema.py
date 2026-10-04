@@ -278,6 +278,13 @@ COLUMNAS_NUEVAS = [
     # propias grabaciones: sin esto, el enlace podía leer y modificar
     # cualquier entrevista de la persona que lo generó, no solo la suya.
     ("grabaciones", "subido_con", "TEXT"),
+    # Fotos que trajo la analista aparte del audio. Cuando no hay video,
+    # son estas las que Claude mira para ubicarlas en el paso a paso.
+    ("grabaciones", "fotos", "TEXT"),
+    # El orden de las fotos dentro de una misma actividad. Antes salían
+    # por la hora en que se subieron, que no es el orden en que se
+    # entiende el proceso: la última tomada puede ser la que va primero.
+    ("evidencias", "orden", "INTEGER DEFAULT 0"),
 ]
 
 

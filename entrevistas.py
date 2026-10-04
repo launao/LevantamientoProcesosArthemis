@@ -147,11 +147,23 @@ def procesar(gid, ruta_audio, ruta_video=None, contexto=""):
         D.execute("UPDATE grabaciones SET analisis=? WHERE id=?",
                   (D.jdump(analisis), gid))
 
-        # ── 3. Mirar los momentos pedidos ───────────────────────────────
+        # ── 3. Mirar las imágenes ───────────────────────────────────────
+        #
+        # De dos sitios posibles: los fotogramas que se sacan del video en
+        # los momentos que Claude pidió, o las fotos que tomó la analista
+        # con el celular cuando no hay video. En los dos casos el resto
+        # del trabajo es el mismo, así que se unifica aquí.
         momentos = (analisis.get("momentos_para_ver") or [])[:MAX_MOMENTOS]
-        if ruta_video and os.path.exists(ruta_video) and momentos:
+        propias = _fotos_propias(gid)
+        hay_video = bool(ruta_video and os.path.exists(ruta_video) and momentos)
+
+        if hay_video or propias:
             _marcar(gid, "imagenes")
-            guardados = _sacar_momentos(gid, ruta_video, momentos)
+            if hay_video:
+                guardados = _sacar_momentos(gid, ruta_video, momentos)
+            else:
+                guardados = propias
+                _avance(gid, len(propias), len(propias))
             D.execute("UPDATE grabaciones SET momentos=? WHERE id=?",
                       (D.jdump(guardados), gid))
 
@@ -171,12 +183,14 @@ def procesar(gid, ruta_audio, ruta_video=None, contexto=""):
                 else:
                     b = D.to_bytes(fila["data"])
                 if b:
-                    imagenes.append({"n": n, "segundo": m["segundo"],
+                    imagenes.append({"n": n, "segundo": m.get("segundo") or 0,
                                      "por_que": m.get("por_que", ""),
+                                     "nombre": m.get("nombre", ""),
                                      "datos": b, "tipo": fila["content_type"] or "image/jpeg"})
 
             if imagenes:
-                revision, _, _ = ia.revisar_imagenes(analisis, imagenes)
+                revision, _, _ = ia.revisar_imagenes(analisis, imagenes,
+                                                     sueltas=not hay_video)
                 analisis["revision_imagenes"] = revision
                 # Lo que Claude corrigió al ver se incorpora al análisis:
                 # el texto de la entrevista era una hipótesis, la imagen manda.
@@ -194,6 +208,27 @@ def procesar(gid, ruta_audio, ruta_video=None, contexto=""):
         _marcar(gid, "error", error=f"inesperado: {e}")
         print("[entrevistas]", traceback.format_exc()[-800:])
     return False
+
+
+def _fotos_propias(gid):
+    """Las fotos que subieron junto al audio, como si fueran momentos.
+
+    Se les da la misma forma que a los fotogramas del video para que todo
+    lo que viene después —revisar, aprobar, mover al proceso— no tenga
+    que saber de dónde salieron. No llevan segundo: no lo hay.
+    """
+    f = D.row("SELECT fotos FROM grabaciones WHERE id=?", (gid,))
+    ids = D.jload(f["fotos"], []) if f else []
+    salida = []
+    for i, x in enumerate(ids, 1):
+        mid = x.get("mediaId") if isinstance(x, dict) else x
+        if not mid:
+            continue
+        salida.append({"n": i, "mediaId": mid, "segundo": 0,
+                       "nombre": (x.get("nombre") if isinstance(x, dict) else "") or "",
+                       "propia": True, "alternativas": [],
+                       "por_que": "", "que_busco": "", "decision": ""})
+    return salida
 
 
 def _sacar_momentos(gid, ruta_video, momentos):
@@ -368,6 +403,22 @@ def guardar_pasos(gid, pasos):
     a["pasos"] = limpios
     D.execute("UPDATE grabaciones SET analisis=? WHERE id=?", (D.jdump(a), gid))
     return {"ok": True, "pasos": len(limpios)}
+
+
+def _paso_por_orden(n, cuantas, cuantos_pasos):
+    """Reparte la foto número n de cuantas entre los pasos que hay.
+
+    Es el último recurso para una foto sin minuto que Claude no ubicó:
+    se supone que las tomaron siguiendo el proceso. No es exacto, pero
+    deja la foto cerca de donde va, y moverla es un arrastre.
+    """
+    if not cuantas or not cuantos_pasos:
+        return None
+    try:
+        i = max(1, int(n))
+    except (TypeError, ValueError):
+        return 1
+    return min(cuantos_pasos, max(1, round((i - 0.5) / cuantas * cuantos_pasos + 0.5)))
 
 
 def _paso_del_minuto(pasos, segundo):
@@ -583,11 +634,16 @@ def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True, posicion=None):
         paso_n = info.get("paso")
         if not (paso_n and 1 <= int(paso_n) <= len(pasos)):
             # Claude no alcanzó a decir a qué paso va, o el repaso de las
-            # imágenes no corrió. Se deduce por el minuto: la foto
-            # pertenece al último paso que ya había empezado cuando se
-            # tomó. Dejarla suelta la mandaba al final del documento,
-            # donde no se entiende de qué es.
-            paso_n = _paso_del_minuto(pasos, m.get("segundo"))
+            # imágenes no corrió. Dejarla suelta la mandaba al final del
+            # documento, donde no se entiende de qué es.
+            if m.get("propia"):
+                # Una foto suelta no tiene minuto: lo único que queda es
+                # el orden en que se tomó, repartido entre los pasos.
+                paso_n = _paso_por_orden(m.get("n"), len(momentos), len(pasos))
+            else:
+                # Del video: pertenece al último paso que ya había
+                # empezado cuando se tomó.
+                paso_n = _paso_del_minuto(pasos, m.get("segundo"))
         campo = (f"f_pasos:{desde + int(paso_n) - 1}"
                  if paso_n and 1 <= int(paso_n) <= len(pasos) else "f_pasos")
         nota = info.get("que_muestra") or m.get("por_que", "")

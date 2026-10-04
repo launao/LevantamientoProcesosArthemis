@@ -996,6 +996,9 @@ body.moviendo-foto .actividad{outline:2px dashed color-mix(in srgb,var(--accent)
   outline-offset:2px}
 .actividad.recibe,.sub.recibe{outline:3px solid var(--accent);outline-offset:2px;
   background:color-mix(in srgb,var(--accent) 12%,transparent)}
+/* Soltar una foto sobre otra la coloca justo antes: la raya marca dónde
+   va a quedar. */
+.ev-item.recibe-antes{box-shadow:-4px 0 0 0 var(--accent)}
 
 /* El código para subir desde el celular. Grande: se lee desde lejos y con
    la mano temblorosa. */

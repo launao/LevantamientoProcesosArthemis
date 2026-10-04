@@ -171,7 +171,7 @@ def _procesos(solo_de=None):
     else:
         ps = D.rows("SELECT * FROM procesos WHERE COALESCE(eliminado,0)=0 "
                     "ORDER BY codigo, nombre")
-    evs = D.rows("SELECT * FROM evidencias ORDER BY creado")
+    evs = D.rows("SELECT * FROM evidencias ORDER BY COALESCE(orden,0), creado")
     tokens = {t["proceso_id"]: t["token"] for t in
               D.rows("SELECT proceso_id, token FROM share_tokens WHERE activo")}
     por_proc = {}
@@ -517,7 +517,7 @@ def analizar_proceso(pid):
                    "WHERE COALESCE(eliminado,0)=0 AND id<>?", (pid,))
     procesos = {x["id"]: x["nombre"] for x in otros}
     evidencias = D.rows("SELECT tipo, nota, campo_id, duracion, media_id "
-                        "FROM evidencias WHERE proceso_id=? ORDER BY creado", (pid,))
+                        "FROM evidencias WHERE proceso_id=? ORDER BY COALESCE(orden,0), creado", (pid,))
 
     texto = ia.armar_texto(p, plantilla, respuestas, nombres, procesos, evidencias)
     catalogo = _catalogo_para_ia(pid)
@@ -642,7 +642,7 @@ def analizar_lote():
             continue
         respuestas = D.jload(p["respuestas"], {})
         evidencias = D.rows("SELECT tipo, nota, campo_id, duracion, media_id "
-                            "FROM evidencias WHERE proceso_id=? ORDER BY creado", (pid,))
+                            "FROM evidencias WHERE proceso_id=? ORDER BY COALESCE(orden,0), creado", (pid,))
         bloques.append(ia.armar_texto(p, plantilla, respuestas, nombres, todos, evidencias))
         incluidos.append(p["nombre"])
         for img in _imagenes_para_ia(pid, plantilla, evidencias)[:cupo]:
@@ -856,7 +856,7 @@ def _fotos_del_documento(ids):
         if not p:
             continue
         for e in D.rows("SELECT media_id, campo_id, nota FROM evidencias "
-                        "WHERE proceso_id=? AND tipo='foto' ORDER BY creado", (pid,)):
+                        "WHERE proceso_id=? AND tipo='foto' ORDER BY COALESCE(orden,0), creado", (pid,)):
             salida.append({"mediaId": e["media_id"], "proceso": p["nombre"],
                            "donde": donde(e["campo_id"]), "nota": e["nota"] or ""})
     return salida
@@ -1882,6 +1882,48 @@ def relacionar_grabacion(gid):
     return jsonify({**r, "grabacion": E.leer(gid)})
 
 
+@api.post("/grabaciones/<gid>/fotos")
+@puede_editar
+def fotos_de_entrevista(gid):
+    """Las fotos que tomaron durante la entrevista, junto al audio.
+
+    Van numeradas en el orden en que llegan, que es el orden en que las
+    tomaron: para una foto sin video, ese orden es casi toda la pista que
+    hay de a qué paso pertenece.
+    """
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+
+    archivos = request.files.getlist("fotos") or request.files.getlist("archivo")
+    if not archivos:
+        return jsonify({"error": "sin_archivos"}), 400
+
+    f = D.row("SELECT fotos FROM grabaciones WHERE id=?", (gid,))
+    ya = D.jload(f["fotos"], []) if f else []
+    rechazadas = []
+    for a in archivos[:60]:
+        datos = a.read()
+        if not datos:
+            continue
+        if len(datos) > MAX_MEDIA:
+            rechazadas.append({"nombre": a.filename, "por_que": "muy pesada"})
+            continue
+        ctype = (a.mimetype or "").split(";")[0].strip()
+        if not ctype.startswith("image/"):
+            rechazadas.append({"nombre": a.filename, "por_que": "no es una imagen"})
+            continue
+        mid = _guardar_media_bytes(None, datos, ctype, a.filename or "foto")
+        ya.append({"mediaId": mid, "nombre": (a.filename or "")[:200]})
+
+    D.execute("UPDATE grabaciones SET fotos=? WHERE id=?", (D.jdump(ya), gid))
+    auditar("fotos_de_entrevista", "grabacion", gid, f"{len(ya)} en total")
+    return jsonify({"ok": True, "total": len(ya), "rechazadas": rechazadas})
+
+
 @api.post("/grabaciones/<gid>/momentos/<int:n>/imagen")
 @puede_editar
 def imagen_de_momento(gid, n):
@@ -2290,6 +2332,41 @@ def mover_evidencia(eid):
     return jsonify({"ok": True})
 
 
+@api.put("/procesos/<pid>/evidencias/orden")
+@puede_editar
+def ordenar_evidencias(pid):
+    """El orden de las fotos dentro de una actividad.
+
+    Lo pone quien revisa arrastrando: el orden en que se subieron no es el
+    orden en que se entiende el proceso, y la última foto tomada es a
+    menudo la que va primero.
+    """
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    if not _mio(p, usuario_actual()):
+        return jsonify({"error": "no_es_tuyo"}), 403
+
+    cuerpo = request.get_json(silent=True) or {}
+    ids = cuerpo.get("ids")
+    # Una lista vacía es válida —no hay nada que ordenar—, pero no mandarla
+    # es un error de quien llama, y callarlo haría creer que se guardó.
+    if not isinstance(ids, list):
+        return jsonify({"error": "falta_la_lista",
+                        "detalle": "Hay que mandar 'ids' con el orden."}), 400
+
+    # Solo se reordena lo que es de este proceso: un id de otro proceso
+    # en la lista no debe poder moverse desde aquí.
+    mias = {f["id"] for f in D.rows("SELECT id FROM evidencias WHERE proceso_id=?",
+                                    (pid,))}
+    n = 0
+    for i, eid in enumerate(ids[:300]):
+        if eid in mias:
+            D.execute("UPDATE evidencias SET orden=? WHERE id=?", (i + 1, eid))
+            n += 1
+    return jsonify({"ok": True, "ordenadas": n})
+
+
 @api.delete("/evidencias/<eid>")
 @puede_editar
 def borrar_evidencia(eid):
@@ -2629,7 +2706,7 @@ def datos_informe(token, embebido=False):
     nombres = {u["id"]: u["nombre"] for u in D.rows("SELECT id, nombre FROM usuarios")}
     enlaces = {x["id"]: x["nombre"] for x in D.rows("SELECT id, nombre FROM procesos")}
 
-    evs = D.rows("SELECT * FROM evidencias WHERE proceso_id=? ORDER BY creado", (t["proceso_id"],))
+    evs = D.rows("SELECT * FROM evidencias WHERE proceso_id=? ORDER BY COALESCE(orden,0), creado", (t["proceso_id"],))
     por_campo = {}
     for e in evs:
         por_campo.setdefault(e["campo_id"] or "", []).append({

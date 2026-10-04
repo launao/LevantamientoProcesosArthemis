@@ -165,6 +165,36 @@ function camposPlanos() {
   return (S.plantilla.secciones || []).flatMap(s =>
     (s.campos || []).map(c => Object.assign({ seccion: s.nombre }, c)));
 }
+/* Redibujar sin perder el cursor.
+
+   Las pantallas se redibujan enteras al filtrar, y eso destruye la
+   casilla donde uno está escribiendo: el navegador se queda sin foco y
+   hay que volver a hacer clic para cada letra. Se guarda dónde iba el
+   cursor y se devuelve al terminar, así se puede escribir de corrido.
+
+   Además se espera un instante antes de redibujar: con cuarenta procesos
+   y alguien escribiendo rápido, repintar en cada tecla se siente lento. */
+const _esperaFiltro = {};
+
+function redibujarConFoco(id, redibujar, ms = 160) {
+  clearTimeout(_esperaFiltro[id]);
+  _esperaFiltro[id] = setTimeout(() => {
+    const antes = document.getElementById(id);
+    const pos = antes && antes.selectionStart != null ? antes.selectionStart : null;
+    const teniaFoco = antes && document.activeElement === antes;
+
+    redibujar();
+
+    const ahora = document.getElementById(id);
+    if (ahora && teniaFoco) {
+      ahora.focus();
+      // Solo las casillas de texto tienen cursor: pedírselo a un
+      // desplegable lanza una excepción en algunos navegadores.
+      try { if (pos != null) ahora.setSelectionRange(pos, pos); } catch (_) {}
+    }
+  }, ms);
+}
+
 /** Texto sin etiquetas: para contar avance y para buscar. */
 function aTextoPlano(html) {
   if (typeof html !== 'string') return '';
@@ -614,7 +644,10 @@ function tableroAdmin(m) {
 
   const bindT = (id, clave) => {
     const el = document.getElementById(id);
-    if (el) el.oninput = el.onchange = () => { S[clave] = el.value; tableroAdmin(m); };
+    if (el) el.oninput = el.onchange = () => {
+      S[clave] = el.value;
+      redibujarConFoco(id, () => tableroAdmin(m));
+    };
   };
   bindT('tBusca', 'buscaAsig'); bindT('tPersona', 'filtroPersona'); bindT('tCuando', 'filtroCuando');
   const tl = document.getElementById('tLimpiar');
@@ -933,7 +966,10 @@ function vistaProcesos(m) {
 
   [['fq', 'q'], ['fa', 'area'], ['fr', 'resp']].forEach(([id, k]) => {
     const el = document.getElementById(id);
-    if (el) el.oninput = el.onchange = () => { S.filtros[k] = el.value; vistaProcesos(m); };
+    if (el) el.oninput = el.onchange = () => {
+      S.filtros[k] = el.value;
+      redibujarConFoco(id, () => vistaProcesos(m));
+    };
   });
   m.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => abrirProceso(tr.dataset.id));
 }
@@ -1792,15 +1828,82 @@ function conectarArrastreFotos(box) {
     el.ondragstart = ev => {
       ev.dataTransfer.setData('text/plain', el.dataset.arrastra);
       ev.dataTransfer.effectAllowed = 'move';
+      _arrastrando = el.dataset.arrastra;
       el.classList.add('arrastrando');
       document.body.classList.add('moviendo-foto');
     };
     el.ondragend = () => {
+      _arrastrando = null;
       el.classList.remove('arrastrando');
       document.body.classList.remove('moviendo-foto');
+      document.querySelectorAll('.recibe,.recibe-antes').forEach(x =>
+        x.classList.remove('recibe', 'recibe-antes'));
     };
   });
+  // Soltar una foto encima de otra las reordena dentro de su actividad:
+  // la arrastrada se mete justo antes de aquella sobre la que se suelta.
+  // Es lo que uno haría con fotos sobre una mesa.
+  box.querySelectorAll('[data-arrastra]').forEach(el => {
+    el.ondragover = ev => {
+      if (!_arrastrando || _arrastrando === el.dataset.arrastra) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      el.classList.add('recibe-antes');
+    };
+    el.ondragleave = () => el.classList.remove('recibe-antes');
+    el.ondrop = async ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      el.classList.remove('recibe-antes');
+      const id = ev.dataTransfer.getData('text/plain');
+      if (!id || id === el.dataset.arrastra) return;
+      await reordenarFoto(id, el.dataset.arrastra, box.dataset.ev);
+    };
+  });
+
   prepararDestinosArrastre();
+}
+
+let _arrastrando = null;
+
+/* Pone una foto justo antes de otra, dentro del mismo sitio.
+
+   Si venía de otra actividad, primero se muda y después se coloca: así
+   se puede arrastrar de una actividad a un punto concreto de otra, no
+   solo al final. */
+async function reordenarFoto(id, antesDe, campo) {
+  const p = S.draft;
+  if (!p) return;
+  const movida = (p.evidencias || []).find(e => e.id === id);
+  if (!movida) return;
+
+  if (movida.campo !== campo) {
+    try {
+      await api('/evidencias/' + id, { method: 'PUT', body: { campo } });
+      movida.campo = campo;
+    } catch (_) { toast('No se pudo mover'); return; }
+  }
+
+  const aqui = (p.evidencias || []).filter(e => e.campo === campo && e.id !== id);
+  const i = aqui.findIndex(e => e.id === antesDe);
+  aqui.splice(i < 0 ? aqui.length : i, 0, movida);
+
+  // El orden se guarda para todo el proceso de una vez: así las demás
+  // actividades conservan el suyo en vez de quedar todas en cero.
+  const resto = (p.evidencias || []).filter(e => e.campo !== campo);
+  const orden = resto.map(e => e.id).concat(aqui.map(e => e.id));
+
+  // Se reordena la copia local para que la pantalla no parpadee al mismo
+  // tiempo que se guarda.
+  p.evidencias = resto.concat(aqui).sort((a, b) =>
+    orden.indexOf(a.id) - orden.indexOf(b.id));
+  pintarEvidencias(p);
+
+  try {
+    await api('/procesos/' + S.procId + '/evidencias/orden',
+              { method: 'PUT', body: { ids: orden } });
+    toast('Orden guardado');
+  } catch (_) { toast('No se pudo guardar el orden'); }
 }
 
 let _destinosListos = false;
@@ -2834,7 +2937,10 @@ function vistaAsignacion(m) {
   const bind = (id, clave) => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.oninput = el.onchange = () => { S[clave] = el.value; vistaAsignacion(m); };
+    el.oninput = el.onchange = () => {
+      S[clave] = el.value;
+      redibujarConFoco(id, () => vistaAsignacion(m));
+    };
   };
   bind('fBusca', 'buscaAsig'); bind('fPersona', 'filtroPersona'); bind('fCuando', 'filtroCuando');
   document.getElementById('organizar').onclick = () => modalColumnas(m);
@@ -6972,6 +7078,12 @@ function modalSubirVideo(procesoId) {
       <input type="file" id="svArchivo"
         accept="video/*,audio/*,.mp4,.mov,.m4v,.avi,.mkv,.m4a,.mp3,.wav,.aac,.ogg,.opus"></label>
 
+    <label class="f"><span class="lbl">Las fotos que tomaron, si hay</span>
+      <span class="hint">Opcional, y lo más útil cuando subes solo el audio: la app
+        las mira, entiende cuál corresponde a cada paso según lo que se oye, y las
+        cuelga ahí. Escógelas en el orden en que las tomaron.</span>
+      <input type="file" id="svFotos" accept="image/*" multiple></label>
+
     <div id="svInfo"></div>
     <div id="svProgreso" class="oculto">
       <div class="sv-barra"><i id="svBarra" style="width:0%"></i></div>
@@ -7021,7 +7133,8 @@ function modalSubirVideo(procesoId) {
       empezar.disabled = true;
       archivo.disabled = true;
       box.querySelector('#svProgreso').classList.remove('oculto');
-      await subirVideo(f, box.querySelector('#svProceso').value, box);
+      const fotos = Array.from((box.querySelector('#svFotos') || {}).files || []);
+      await subirVideo(f, box.querySelector('#svProceso').value, box, fotos);
     };
 
     box.querySelector('#svCancelar').onclick = async () => {
@@ -7106,7 +7219,7 @@ function modalRetomarSubida(g) {
 }
 
 
-async function subirVideo(archivo, procesoId, box) {
+async function subirVideo(archivo, procesoId, box, fotos) {
   const texto = box.querySelector('#svTexto');
   const decir = (t) => { if (texto) texto.textContent = t; };
 
@@ -7128,6 +7241,25 @@ async function subirVideo(archivo, procesoId, box) {
       (e.data && e.data.detalle) || (c ? 'El servidor dijo: ' + c : '')
       || (e.status ? 'Error ' + e.status + ' del servidor.' : 'Revisa la conexión.'))));
     return;
+  }
+
+  // Las fotos van antes que el audio: son pocos megas y tienen que estar
+  // guardadas cuando el análisis termine de oír, que es cuando se miran.
+  if (fotos && fotos.length) {
+    const texto2 = box.querySelector('#svTexto');
+    if (texto2) texto2.textContent = `Subiendo ${fotos.length} foto(s)…`;
+    const cuerpo = new FormData();
+    fotos.forEach(f => cuerpo.append('fotos', f));
+    try {
+      const r = await fetch(`/api/grabaciones/${gid}/fotos`,
+                            { method: 'POST', credentials: 'same-origin', body: cuerpo });
+      const d = await r.json();
+      if (d.rechazadas && d.rechazadas.length) {
+        toast(`${d.rechazadas.length} archivo(s) no eran fotos y quedaron fuera`);
+      }
+    } catch (_) {
+      toast('No se pudieron subir las fotos; la grabación sigue');
+    }
   }
 
   return bucleSubida(archivo, gid, trozo, 0, box);
