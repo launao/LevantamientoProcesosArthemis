@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Subir la entrevista</title>
+<meta name="theme-color" content="#112236">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="{{ url_for('static', filename='icono.svg') }}" type="image/svg+xml">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icono-180.png') }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+<style>
+  /* Pensada para un celular en la mano de alguien que no usa la app:
+     una sola cosa que hacer, en letra grande. */
+  body{background:var(--paper)}
+  .ent{max-width:560px;margin:0 auto;padding:20px 16px 40px}
+  .ent h1{margin:0 0 4px;font-size:25px;letter-spacing:-.3px;line-height:1.25}
+  .ent .meta{color:var(--ink-2);font-size:16px}
+  .elegir{display:block;margin:22px 0 0;padding:26px 18px;border-radius:14px;
+    border:2.5px dashed var(--line);background:var(--surface);text-align:center;
+    font-size:19px;font-weight:700;cursor:pointer;color:var(--ink)}
+  .elegir:active{background:var(--surface-2)}
+  .elegir small{display:block;margin-top:7px;font-size:14.5px;font-weight:500;
+    color:var(--ink-2)}
+  .elegir input{display:none}
+  #barra{margin-top:20px}
+  #texto{font-size:16.5px;margin-top:10px;font-weight:600}
+  .nota{margin-top:22px;font-size:14.5px;color:var(--ink-2);line-height:1.5}
+  .listo{text-align:center;padding:30px 10px}
+  .listo .tic{font-size:54px;line-height:1}
+  .btn.grande{width:100%;justify-content:center;padding:17px;font-size:18px;
+    font-weight:700;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="ent">
+  <header>
+    <h1>Subir la entrevista</h1>
+    <div class="meta" id="meta">Un momento…</div>
+  </header>
+  <div id="cuerpo"></div>
+</div>
+
+<script>
+const TOKEN = {{ token|tojson }};
+const $ = s => document.querySelector(s);
+let TROZO = 5 * 1024 * 1024;
+
+function esAudio(f) {
+  return /^audio\//.test(f.type || '')
+      || /\.(m4a|mp3|wav|aac|ogg|opus|amr|caf)$/i.test(f.name);
+}
+
+async function arrancar() {
+  let d;
+  try { d = await (await fetch('/api/entrevista/' + TOKEN)).json(); }
+  catch (_) { d = { error: 'sin_conexion' }; }
+
+  if (d.error === 'enlace_vencido') {
+    $('#meta').textContent = '';
+    $('#cuerpo').innerHTML = `<div class="aviso-ia error">
+      <b>Este enlace ya no sirve.</b> Caducan solas por seguridad.
+      Pídele a quien te lo mandó que te genere uno nuevo.</div>`;
+    return;
+  }
+  if (d.error) {
+    $('#cuerpo').innerHTML = `<div class="aviso-ia error">
+      No se pudo conectar. Revisa el wifi y vuelve a abrir el enlace.</div>`;
+    return;
+  }
+  if (d.sinLlave) {
+    $('#cuerpo').innerHTML = `<div class="aviso-ia error">
+      La app todavía no tiene configurado el servicio de voz, así que no
+      podría entender la grabación. Avísale a la coordinación.</div>`;
+    return;
+  }
+
+  TROZO = d.trozo || TROZO;
+  $('#meta').textContent = d.proceso
+    ? d.proceso : 'Te la pidió ' + (d.de || 'la coordinación') + '.';
+
+  $('#cuerpo').innerHTML = `
+    <label class="elegir">
+      📹 Escoger el video o el audio
+      <small>De la galería del celular. Puede ser de hasta dos horas.</small>
+      <input type="file" id="archivo"
+        accept="video/*,audio/*,.mp4,.mov,.m4v,.m4a,.mp3,.wav,.aac">
+    </label>
+    <div id="info"></div>
+    <div class="nota">
+      No cierres esta pantalla mientras sube. Si se corta el wifi, vuelve a
+      abrir el enlace y escoge el mismo archivo: sigue donde iba, no empieza
+      de nuevo.
+    </div>`;
+
+  $('#archivo').onchange = () => {
+    const f = $('#archivo').files[0];
+    if (f) confirmar(f);
+  };
+}
+
+function confirmar(f) {
+  const mb = f.size / 1048576;
+  const min = Math.max(1, Math.round(mb / (25 / 8) / 60));
+  $('#cuerpo').innerHTML = `
+    <div class="aviso-ia">
+      <b>${f.name.replace(/[<>&]/g, '')}</b><br>
+      ${mb > 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'} ·
+      por wifi tardaría unos ${min} min.
+      ${esAudio(f) ? '<br>Es solo audio: sube rapidísimo.' : ''}
+    </div>
+    <div id="barra" class="sv-barra"><i style="width:0%"></i></div>
+    <div id="texto">Empezando…</div>
+    <div class="nota">Puedes dejar el celular quieto con la pantalla
+      encendida. Si se apaga, la subida se pausa y sigue al volver.</div>`;
+  subir(f);
+}
+
+async function subir(f) {
+  const barra = $('#barra i');
+  const decir = t => { const x = $('#texto'); if (x) x.textContent = t; };
+
+  let gid, desde = 0;
+  try {
+    const r = await fetch('/api/entrevista/' + TOKEN + '/iniciar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre: f.name, bytes: f.size }) });
+    const d = await r.json();
+    if (!r.ok) throw d;
+    gid = d.id;
+    TROZO = d.trozo || TROZO;
+    // Queda anotado en este celular: si el wifi se cae y vuelve a abrir el
+    // enlace, se retoma esta misma subida en vez de empezar otra.
+    try { localStorage.setItem('ent_' + TOKEN, gid); } catch (_) {}
+  } catch (e) {
+    decir(e && e.detalle ? e.detalle : 'No se pudo empezar. Revisa el wifi.');
+    return;
+  }
+
+  let fallos = 0;
+  while (desde < f.size) {
+    try {
+      const r = await fetch('/api/entrevista/' + TOKEN + '/' + gid, {
+        method: 'POST',
+        headers: { 'X-Desde': String(desde),
+                   'Content-Type': 'application/octet-stream' },
+        body: f.slice(desde, Math.min(desde + TROZO, f.size)) });
+      if (r.status === 409) { desde = (await r.json()).recibidos || 0; continue; }
+      if (!r.ok) throw new Error('http');
+      const d = await r.json();
+      if (!(d.recibidos > desde)) throw new Error('no_avanza');
+      desde = d.recibidos;
+      fallos = 0;
+      const pc = desde / f.size * 100;
+      if (barra) barra.style.width = pc.toFixed(1) + '%';
+      decir(Math.round(pc) + '% · ' + Math.round(desde / 1048576) + ' de '
+            + Math.round(f.size / 1048576) + ' MB');
+    } catch (_) {
+      if (++fallos > 8) {
+        decir('Se perdió la conexión. Vuelve a abrir el enlace con wifi y '
+              + 'escoge el mismo archivo: sigue desde aquí.');
+        return;
+      }
+      decir('Sin señal. Reintentando… (' + fallos + ')');
+      await new Promise(r => setTimeout(r, Math.min(30000, 2000 * fallos)));
+      try {
+        const e2 = await (await fetch('/api/entrevista/' + TOKEN + '/' + gid)).json();
+        desde = e2.recibidos || desde;
+      } catch (__) {}
+    }
+  }
+
+  decir('Ya subió. Guardando…');
+  try {
+    const r = await fetch('/api/entrevista/' + TOKEN + '/' + gid + '/terminar',
+                          { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw d;
+    try { localStorage.removeItem('ent_' + TOKEN); } catch (_) {}
+    $('#cuerpo').innerHTML = `<div class="listo">
+      <div class="tic">✅</div>
+      <h2 style="margin:12px 0 6px">Listo, ya quedó</h2>
+      <p class="meta">La app la está escuchando y armando el paso a paso.
+        Puedes cerrar esta pantalla.</p>
+      <button class="btn grande" onclick="location.reload()">Subir otra</button>
+    </div>`;
+  } catch (e) {
+    decir(e && e.detalle ? e.detalle
+      : 'Subió pero no se pudo procesar. Avísale a la coordinación.');
+  }
+}
+
+arrancar();
+</script>
+</body>
+</html>

@@ -5970,7 +5970,8 @@ async function vistaEntrevistas(m) {
   <div class="topbar"><h1>Entrevistas grabadas</h1><div class="sp"></div>
     <span class="tiny">${gs.length}</span>
     <button class="btn" id="comoSubir">Atajo para Mac</button>
-    <button class="btn p" id="subirAqui">⤒ Subir un video</button></div>
+    <button class="btn" id="desdeCel">📱 Desde el celular</button>
+    <button class="btn p" id="subirAqui">⤒ Subir video o audio</button></div>
 
   <div class="banner">
     Graba la entrevista con el celular como siempre. Después súbela de una de dos
@@ -5987,6 +5988,7 @@ async function vistaEntrevistas(m) {
         <span class="tiny">Usa el botón de arriba para ver cómo subirlas.</span></div>`}`;
 
   document.getElementById('comoSubir').onclick = modalComoSubir;
+  document.getElementById('desdeCel').onclick = () => modalDesdeCelular();
   document.getElementById('subirAqui').onclick = () => modalSubirVideo();
   m.querySelectorAll('[data-vergrab]').forEach(b =>
     b.onclick = () => abrirGrabacion(b.dataset.vergrab));
@@ -6680,6 +6682,61 @@ function modalEditarPasos(gid, g, cajaPadre) {
    ═══════════════════════════════════════════════════════════════ */
 const SUBIDA = { activa: null };
 
+/* Subir desde el celular.
+
+   Es el camino más corto que hay: el video ya está en el celular, así que
+   lo que sobra es el paso de pasarlo al computador. Se apunta la cámara
+   al código y se escoge de la galería. No hay que instalar nada ni
+   escribir la contraseña en un teclado de celular. */
+function modalDesdeCelular(procesoId) {
+  modal(`<h3>Subir desde el celular</h3>
+    <p class="mut" style="margin-top:-6px">
+      El video ya está en el celular. Esto se salta el paso de pasarlo al
+      computador.</p>
+
+    <label class="f"><span class="lbl">¿De qué proceso es? (opcional)</span>
+      <select id="dcProceso">
+        <option value="">Lo decido después</option>
+        ${procesosQuePuedoTocar().map(p => `<option value="${p.id}" ${
+          p.id === procesoId ? 'selected' : ''}>${esc(etiquetaProceso(p.id))}</option>`).join('')}
+      </select></label>
+
+    <button class="btn p" id="dcGenerar" style="margin-top:4px">
+      Generar el código</button>
+    <div id="dcCaja"></div>
+
+    <div class="flex" style="margin-top:16px">
+      <button class="btn right" data-cerrar>Cerrar</button>
+    </div>`, box => {
+
+    box.querySelector('#dcGenerar').onclick = async () => {
+      const b = box.querySelector('#dcGenerar');
+      b.disabled = true; b.textContent = 'Generando…';
+      try {
+        const r = await api('/grabaciones/enlace-celular', { method: 'POST',
+          body: { proceso: box.querySelector('#dcProceso').value } });
+        box.querySelector('#dcCaja').innerHTML = `
+          <div class="qr-caja">${r.qr || ''}</div>
+          <ol class="pasos-cel">
+            <li>Abre la cámara del celular y apúntala al código.</li>
+            <li>Toca el aviso que sale para abrir la página.</li>
+            <li>Escoge el video o el audio de la galería. Listo.</li>
+          </ol>
+          <div class="f"><span class="lbl">O mándale el enlace por WhatsApp</span>
+            <input type="text" readonly value="${esc(r.url)}" id="dcUrl"
+                   onclick="this.select()"></div>
+          <div class="tiny">El enlace sirve ${r.horas} horas y después caduca solo.
+            Quien lo tenga puede subir entrevistas a tu nombre, así que no lo
+            publiques en un grupo grande.</div>`;
+        b.classList.add('oculto');
+      } catch (_) {
+        toast('No se pudo generar el código');
+        b.disabled = false; b.textContent = 'Generar el código';
+      }
+    };
+  });
+}
+
 function modalSubirVideo(procesoId) {
   modal(`<h3>Subir una entrevista</h3>
     <p class="mut" style="margin-top:-6px">
@@ -6696,10 +6753,13 @@ function modalSubirVideo(procesoId) {
           p.id === procesoId ? 'selected' : ''}>${esc(etiquetaProceso(p.id))}</option>`).join('')}
       </select></label>
 
-    <label class="f"><span class="lbl">El video de la entrevista</span>
-      <span class="hint">Puede ser de hasta dos horas. No se guarda en el servidor:
-        se le saca la voz y se borra.</span>
-      <input type="file" id="svArchivo" accept="video/*,.mp4,.mov,.m4v,.avi,.mkv"></label>
+    <label class="f"><span class="lbl">El video o el audio de la entrevista</span>
+      <span class="hint">Puede ser de hasta dos horas. Si ya tienes solo el audio
+        —una grabadora de voz, un memo de WhatsApp— súbelo así: pesa cien veces
+        menos y sube en un minuto. Del video no se guarda nada: se le saca la voz,
+        las fotos de los momentos que importan, y se borra.</span>
+      <input type="file" id="svArchivo"
+        accept="video/*,audio/*,.mp4,.mov,.m4v,.avi,.mkv,.m4a,.mp3,.wav,.aac,.ogg,.opus"></label>
 
     <div id="svInfo"></div>
     <div id="svProgreso" class="oculto">
@@ -6728,11 +6788,18 @@ function modalSubirVideo(procesoId) {
       if (!f) { info.innerHTML = ''; empezar.disabled = true; return; }
       const mb = f.size / 1048576;
       const lento = mb / (25 / 8) / 60;      // minutos a 25 Mbps
+      // Se mira el tipo que declara el aparato y, si no dice nada, la
+      // extensión: algunos Android mandan los audios sin tipo.
+      const esAudio = /^audio\//.test(f.type || '')
+        || /\.(m4a|mp3|wav|aac|ogg|opus|amr|caf)$/i.test(f.name);
       info.innerHTML = `<div class="aviso-ia">
         <b>${esc(f.name)}</b><br>
         ${mb > 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'} ·
         por wifi normal tardaría unos ${Math.max(1, Math.round(lento))} min.
-        ${mb > 6000 ? '<br><b>Es muy pesado.</b> Si graban en 4K, bajen a 1080p: para una entrevista se ve igual y pesa la tercera parte.' : ''}
+        ${esAudio
+          ? '<br>Es solo audio: sube rápido y sirve igual para el paso a paso. '
+            + 'Lo único que no tendrá son las fotos, porque esas salen de mirar el video.'
+          : (mb > 6000 ? '<br><b>Es muy pesado.</b> Si graban en 4K, bajen a 1080p: para una entrevista se ve igual y pesa la tercera parte.' : '')}
       </div>`;
       empezar.disabled = false;
     };

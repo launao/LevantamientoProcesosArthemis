@@ -1489,18 +1489,28 @@ def subir_trozo(gid):
 @api.post("/grabaciones/<gid>/subir/terminar")
 @puede_editar
 def subir_terminar(gid):
-    """El video llegó completo: se le saca la voz y se manda a analizar."""
+    """El archivo llegó completo: se le saca la voz y se manda a analizar."""
     g = E.leer(gid)
     if not g:
         return jsonify({"error": "no_existe"}), 404
     u = usuario_actual()
     if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
         return jsonify({"error": "sin_permiso"}), 403
+    payload, code = _cerrar_subida(gid, g)
+    return jsonify(payload), code
 
+
+def _cerrar_subida(gid, g):
+    """Lo que pasa cuando el archivo ya llegó entero.
+
+    Está aparte porque entran por aquí dos caminos: la app con sesión y el
+    enlace del celular, que no la tiene. Si fueran dos copias, un arreglo
+    en una dejaría la otra rota.
+    """
     f = D.row("SELECT ruta_video FROM grabaciones WHERE id=?", (gid,))
     ruta = f["ruta_video"] if f else None
     if not ruta or not os.path.exists(ruta):
-        return jsonify({"error": "sin_video"}), 422
+        return {"error": "sin_video"}, 422
 
     try:
         datos = V.info(ruta)
@@ -1508,36 +1518,199 @@ def subir_terminar(gid):
         SUB.cancelar(gid)
         D.execute("UPDATE grabaciones SET estado='error', error=? WHERE id=?",
                   (f"video_ilegible: {e}", gid))
-        return jsonify({"error": "video_ilegible",
-                        "detalle": "El archivo llegó incompleto o el formato no se "
-                                   "puede leer. Vuelve a subirlo."}), 422
+        return {"error": "video_ilegible",
+                "detalle": "El archivo llegó incompleto o el formato no se "
+                           "puede leer. Vuelve a subirlo."}, 422
 
     if not datos["tiene_audio"]:
         SUB.cancelar(gid)
         D.execute("UPDATE grabaciones SET estado='error', error=? WHERE id=?",
-                  ("sin_voz: el video no trae audio", gid))
-        return jsonify({"error": "sin_audio",
-                        "detalle": "El video no trae pista de audio."}), 422
+                  ("sin_voz: el archivo no trae audio", gid))
+        return {"error": "sin_audio",
+                "detalle": "El archivo no trae pista de audio. Sin voz no "
+                           "hay nada que transcribir."}, 422
 
     # La voz se saca en segundo plano: con seis gigas, ffmpeg tarda más de
     # los 120 segundos que gunicorn le da a una petición, y el trabajador
     # moría a medio camino dejando la entrevista colgada.
     D.execute("UPDATE grabaciones SET duracion=?, ruta_video=NULL WHERE id=?",
               (int(datos["segundos"]), gid))
+    # Si lo que subieron ya es audio, no hay nada que extraer ni fotogramas
+    # que sacar: se manda derecho a transcribir. Lo decide el archivo, no
+    # su nombre, porque un .mp4 puede traer solo voz y un .m4a mal
+    # nombrado puede traer imagen.
+    solo_voz = not datos["tiene_video"]
 
     contexto = ""
     if g["procesoId"]:
         pr = D.row("SELECT nombre, area FROM procesos WHERE id=?", (g["procesoId"],))
         if pr:
-            contexto = (f"La entrevista es sobre el proceso «{pr['nombre']}» "
-                        f"del área {pr['area'] or 'sin área'}.")
+            nom, area = pr["nombre"], pr["area"] or "sin área"
+            contexto = (f"La entrevista es sobre el proceso «{nom}» "
+                        f"del área {area}.")
 
-    # El video se procesa y se borra en el mismo paso: lo que vale son los
-    # 28 MB de voz y las pocas imágenes, no los seis gigas.
-    E.desde_video_en_segundo_plano(gid, ruta, contexto)
+    if solo_voz:
+        D.execute("UPDATE grabaciones SET audio_bytes=? WHERE id=?",
+                  (os.path.getsize(ruta), gid))
+        # El archivo subido ES el audio: se transcribe tal cual y se borra
+        # al terminar, igual que uno extraído.
+        E.procesar_en_segundo_plano(gid, ruta, None, contexto)
+    else:
+        # El video se procesa y se borra en el mismo paso: lo que vale son
+        # los 28 MB de voz y las pocas imágenes, no los seis gigas.
+        E.desde_video_en_segundo_plano(gid, ruta, contexto)
     auditar("subida_terminada", "grabacion", gid,
-            f"{int(datos['segundos'])//60} min")
-    return jsonify({"ok": True, "grabacion": E.leer(gid)})
+            f"{int(datos['segundos'])//60} min" + (" (solo voz)" if solo_voz else ""))
+    return {"ok": True, "soloVoz": solo_voz, "grabacion": E.leer(gid)}, 200
+
+
+# ── Subir desde el celular, sin iniciar sesión ─────────────────────────────
+#
+# La forma más sencilla que encontré: el mismo enlace con QR que ya se usa
+# para la evidencia. Se abre la cámara del celular sobre el código, se
+# escoge el video de la galería y listo. No hay que instalar nada, ni
+# recordar la contraseña en un teclado de celular, ni pasar el video al
+# computador primero.
+#
+# El enlace es la credencial y caduca solo, igual que el de captura. Se
+# marca con este campo para no confundirlo con los de evidencia.
+MARCA_ENTREVISTA = "__entrevista__"
+
+
+@api.post("/grabaciones/enlace-celular")
+@puede_editar
+def enlace_celular():
+    u = usuario_actual()
+    d = request.get_json(silent=True) or {}
+    pid = (d.get("proceso") or "").strip()
+    if pid:
+        p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+        if not p:
+            return jsonify({"error": "proceso_no_existe"}), 404
+        if not _mio(p, u):
+            return jsonify({"error": "no_es_tuyo"}), 403
+
+    # Un enlace vigente por persona y proceso: pedirlo otra vez reemplaza
+    # el anterior, para que no queden enlaces viejos dando vueltas.
+    D.execute("UPDATE capture_tokens SET activo=? WHERE campo_id=? AND creado_por=? "
+              "AND proceso_id=?",
+              (False if D.USE_PG else 0, MARCA_ENTREVISTA, u["id"], pid or "-"))
+
+    token = secrets.token_urlsafe(24)
+    expira = (datetime.utcnow() + timedelta(hours=HORAS_TOKEN)).isoformat(timespec="seconds")
+    D.execute(
+        "INSERT INTO capture_tokens (token, proceso_id, campo_id, creado_por, expira, "
+        "activo) VALUES (?,?,?,?,?,?)",
+        (token, pid or "-", MARCA_ENTREVISTA, u["id"], expira, True if D.USE_PG else 1))
+    auditar("enlace_celular_creado", "grabacion", None, pid or "sin proceso")
+
+    url = request.host_url.rstrip("/") + "/e/" + token
+    return jsonify({"ok": True, "url": url, "qr": _qr_svg(url), "horas": HORAS_TOKEN,
+                    "expira": expira + "Z"})
+
+
+def _token_entrevista(token):
+    t = _token_valido(token)
+    if not t or (t["campo_id"] or "") != MARCA_ENTREVISTA:
+        return None
+    return t
+
+
+@api.get("/entrevista/<token>")
+def entrevista_info(token):
+    t = _token_entrevista(token)
+    if not t:
+        return jsonify({"error": "enlace_vencido"}), 410
+    pid = t["proceso_id"] if t["proceso_id"] != "-" else ""
+    p = D.row("SELECT codigo, nombre FROM procesos WHERE id=?", (pid,)) if pid else None
+    quien = D.row("SELECT nombre FROM usuarios WHERE id=?", (t["creado_por"],))
+    return jsonify({"ok": True,
+                    "proceso": (f"{p['codigo']} · {p['nombre']}" if p and p["codigo"]
+                                else (p["nombre"] if p else "")),
+                    "de": quien["nombre"] if quien else "",
+                    "trozo": SUB.TROZO,
+                    "sinLlave": not TR.proveedor_activo()})
+
+
+@api.post("/entrevista/<token>/iniciar")
+def entrevista_iniciar(token):
+    t = _token_entrevista(token)
+    if not t:
+        return jsonify({"error": "enlace_vencido"}), 410
+    if not TR.proveedor_activo():
+        return jsonify({"error": "sin_llave_voz"}), 422
+
+    d = request.get_json(silent=True) or {}
+    pid = t["proceso_id"] if t["proceso_id"] != "-" else None
+    SUB.limpiar_viejas()
+    gid = E.crear(d.get("nombre") or "entrevista", pid, t["creado_por"],
+                  0, int(d.get("bytes") or 0), 0)
+    try:
+        info = SUB.iniciar(gid, d.get("nombre") or "", d.get("bytes") or 0)
+    except SUB.SubidaError as e:
+        D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
+        return jsonify({"error": e.codigo, "detalle": e.detalle}), 422
+    except Exception as e:
+        D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
+        current_app.logger.exception("celular: no se pudo preparar la subida")
+        return jsonify({"error": "no_se_pudo_preparar", "detalle": str(e)[:200]}), 500
+
+    # Queda marcada con el enlace que la subió: el enlace solo podrá
+    # tocar las suyas.
+    D.execute("UPDATE grabaciones SET subido_con=? WHERE id=?", (token, gid))
+    D.execute("UPDATE capture_tokens SET usos=COALESCE(usos,0)+1 WHERE token=?", (token,))
+    auditar("subida_desde_celular", "grabacion", gid,
+            f"{int(d.get('bytes') or 0) // (1024*1024)} MB")
+    return jsonify({"ok": True, "id": gid, **info})
+
+
+def _grabacion_del_token(t, gid):
+    """Que el enlace solo pueda tocar lo que él mismo empezó.
+
+    No basta con que sea de la misma persona: con el enlace en la mano,
+    cualquiera podría entonces leer o pisar las demás entrevistas de ella.
+    Se compara el enlace con el que quedó marcado al crearla.
+    """
+    f = D.row("SELECT subido_con FROM grabaciones WHERE id=?", (gid,))
+    if not f or (f["subido_con"] or "") != t["token"]:
+        return None
+    return E.leer(gid)
+
+
+@api.get("/entrevista/<token>/<gid>")
+def entrevista_estado(token, gid):
+    t = _token_entrevista(token)
+    if not t or not _grabacion_del_token(t, gid):
+        return jsonify({"error": "enlace_vencido"}), 410
+    return jsonify(SUB.estado(gid) or {"error": "no_existe"})
+
+
+@api.post("/entrevista/<token>/<gid>")
+def entrevista_trozo(token, gid):
+    t = _token_entrevista(token)
+    if not t or not _grabacion_del_token(t, gid):
+        return jsonify({"error": "enlace_vencido"}), 410
+    datos = request.get_data()
+    if not datos:
+        return jsonify({"error": "trozo_vacio"}), 400
+    try:
+        desde = int(request.headers.get("X-Desde") or 0)
+        r = SUB.recibir_trozo(gid, desde, datos)
+    except SUB.SubidaError as e:
+        if e.codigo == "desfasado":
+            return jsonify({"error": e.codigo, **(SUB.estado(gid) or {})}), 409
+        return jsonify({"error": e.codigo, "detalle": e.detalle}), 422
+    return jsonify({"ok": True, **r})
+
+
+@api.post("/entrevista/<token>/<gid>/terminar")
+def entrevista_terminar(token, gid):
+    t = _token_entrevista(token)
+    g = _grabacion_del_token(t, gid) if t else None
+    if not g:
+        return jsonify({"error": "enlace_vencido"}), 410
+    payload, code = _cerrar_subida(gid, g)
+    return jsonify(payload), code
 
 
 @api.delete("/grabaciones/<gid>/subir")

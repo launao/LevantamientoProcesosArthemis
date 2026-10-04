@@ -988,6 +988,13 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
 /* El video a medio subir se marca aparte: no está listo ni roto, está
    esperando que alguien lo termine. */
 .grab-card.subiendo{border-left:5px solid var(--warn,#d98324);background:var(--surface-2)}
+/* El código para subir desde el celular. Grande: se lee desde lejos y con
+   la mano temblorosa. */
+.qr-caja{display:flex;justify-content:center;margin:16px 0 4px}
+.qr-caja svg{width:220px;height:220px;border:1.5px solid var(--line);
+  border-radius:12px;background:#fff;padding:8px}
+.pasos-cel{margin:10px 0 4px;padding-left:22px;font-size:15.5px;line-height:1.7}
+
 /* Las fotos de cada actividad, visibles en la tabla sin abrir el detalle.
    Pequeñas pero reconocibles: la idea es ver de un golpe qué actividades
    tienen evidencia y cuáles no. */

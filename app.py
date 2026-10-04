@@ -68,6 +68,16 @@ def crear_app():
         el token del enlace es la credencial y caduca solo."""
         return render_template("captura.html", token=token)
 
+    @app.get("/e/<token>")
+    def subir_entrevista(token):
+        """La página que se abre en el celular para subir la entrevista.
+
+        Sin sesión a propósito: el enlace es la credencial. Escribir una
+        contraseña en un teclado de celular, para subir un archivo y
+        cerrar, era la parte que hacía que nadie lo usara.
+        """
+        return render_template("entrevista.html", token=token)
+
     @app.get("/c/<token>/media/<mid>")
     def captura_media(token, mid):
         return capture_media(token, mid)

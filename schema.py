@@ -274,6 +274,10 @@ COLUMNAS_NUEVAS = [
     ("grabaciones", "progreso", "INTEGER DEFAULT 0"),
     ("grabaciones", "total", "INTEGER DEFAULT 0"),
     ("grabaciones", "paso_desde", "TEXT"),
+    # Con qué enlace del celular se subió. Es lo que ata el enlace a sus
+    # propias grabaciones: sin esto, el enlace podía leer y modificar
+    # cualquier entrevista de la persona que lo generó, no solo la suya.
+    ("grabaciones", "subido_con", "TEXT"),
 ]
 
 
