@@ -10,6 +10,7 @@ import re
 import io
 import os
 import secrets
+import tempfile
 import uuid
 from datetime import datetime, timedelta
 
@@ -17,8 +18,10 @@ from flask import Blueprint, jsonify, request, send_file, Response
 
 import db as D
 import documentos as Doc
+import entrevistas as E
 import flujo as F
 import ia
+import transcribir as TR
 from sanitizar import limpiar_respuestas, a_texto_plano, limpiar_html
 from auth import (usuario_actual, iniciar_sesion, cerrar_sesion, login_required,
                   puede_editar, rol_required, hash_password, verify_password,
@@ -1298,6 +1301,193 @@ def diagnostico():
     })
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Entrevistas grabadas
+# ═══════════════════════════════════════════════════════════════════════════
+
+MAX_AUDIO = int(os.environ.get("MAX_AUDIO_MB", "150")) * 1024 * 1024
+MAX_VIDEO_AUX = int(os.environ.get("MAX_VIDEO_MB", "900")) * 1024 * 1024
+
+
+@api.get("/voz/estado")
+@rol_required("admin")
+def voz_estado():
+    return jsonify(TR.estado())
+
+
+@api.put("/voz/llave")
+@rol_required("admin")
+def voz_llave():
+    d = request.get_json(silent=True) or {}
+    prov = d.get("proveedor")
+    if prov not in TR.PROVEEDORES:
+        return jsonify({"error": "proveedor_invalido"}), 400
+    TR.guardar_llave(prov, d.get("llave") or "")
+    auditar("voz_llave", "config", prov)
+    return jsonify({"ok": True, **TR.estado()})
+
+
+@api.post("/grabaciones")
+@puede_editar
+def subir_grabacion():
+    """Recibe el audio de una entrevista, y el video si cabe.
+
+    El audio es obligatorio: es donde está lo que la persona explicó. El
+    video es opcional porque pesa cien veces más y muchas veces se queda
+    en el computador de quien grabó; sin él se pierde solo la evidencia
+    en imágenes, no el paso a paso.
+    """
+    audio = request.files.get("audio")
+    if not audio:
+        return jsonify({"error": "sin_audio"}), 400
+    if not TR.proveedor_activo():
+        return jsonify({"error": "sin_llave_voz"}), 422
+
+    datos_audio = audio.read()
+    if not datos_audio:
+        return jsonify({"error": "audio_vacio"}), 400
+    if len(datos_audio) > MAX_AUDIO:
+        return jsonify({"error": "audio_muy_grande",
+                        "max_mb": MAX_AUDIO // (1024 * 1024)}), 413
+
+    u = usuario_actual()
+    pid = (request.form.get("proceso") or "").strip() or None
+    if pid:
+        p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+        if not p:
+            return jsonify({"error": "proceso_no_existe"}), 404
+        if not _mio(p, u):
+            return jsonify({"error": "no_es_tuyo"}), 403
+
+    try:
+        duracion = int(float(request.form.get("duracion") or 0))
+    except (TypeError, ValueError):
+        duracion = 0
+
+    carpeta = tempfile.mkdtemp(prefix="entrev_")
+    ruta_audio = os.path.join(carpeta, audio.filename or "audio.m4a")
+    with open(ruta_audio, "wb") as fh:
+        fh.write(datos_audio)
+
+    ruta_video = None
+    video = request.files.get("video")
+    if video:
+        datos_video = video.read()
+        if 0 < len(datos_video) <= MAX_VIDEO_AUX:
+            ruta_video = os.path.join(carpeta, video.filename or "video.mp4")
+            with open(ruta_video, "wb") as fh:
+                fh.write(datos_video)
+
+    gid = E.crear(request.form.get("nombre") or (audio.filename or "entrevista"),
+                  pid, u["id"], duracion,
+                  int(request.form.get("origenBytes") or 0), len(datos_audio))
+
+    contexto = ""
+    if pid:
+        pr = D.row("SELECT nombre, area FROM procesos WHERE id=?", (pid,))
+        if pr:
+            contexto = f"La entrevista es sobre el proceso «{pr['nombre']}» del área {pr['area'] or 'sin área'}."
+
+    E.procesar_en_segundo_plano(gid, ruta_audio, ruta_video, contexto)
+    auditar("grabacion_subida", "grabacion", gid,
+            f"{len(datos_audio)//1024} KB de audio" + (", con video" if ruta_video else ""))
+
+    return jsonify({"ok": True, "id": gid, "conVideo": bool(ruta_video),
+                    "grabacion": E.leer(gid)})
+
+
+@api.get("/grabaciones")
+@login_required
+def listar_grabaciones():
+    u = usuario_actual()
+    solo = None if u["rol"] in ("admin", "clinica", "lector") else u["id"]
+    return jsonify({"grabaciones": E.listar(solo)})
+
+
+@api.get("/grabaciones/<gid>")
+@login_required
+def leer_grabacion(gid):
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] not in ("admin", "clinica", "lector") and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+    return jsonify({"grabacion": g})
+
+
+@api.post("/grabaciones/<gid>/momentos/<int:n>")
+@puede_editar
+def revisar_momento_api(gid, n):
+    """Aprobar, descartar o cambiar de toma."""
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+
+    d = request.get_json(silent=True) or {}
+    r = E.revisar_momento(gid, n, d.get("decision"), d.get("mediaId"))
+    if r.get("error"):
+        return jsonify(r), 404
+    return jsonify(r)
+
+
+@api.put("/grabaciones/<gid>/pasos")
+@puede_editar
+def guardar_pasos_api(gid):
+    """Los pasos corregidos a mano antes de volcarlos."""
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+
+    d = request.get_json(silent=True) or {}
+    r = E.guardar_pasos(gid, d.get("pasos"))
+    if r.get("error"):
+        return jsonify(r), 400
+    return jsonify(r)
+
+
+@api.post("/grabaciones/<gid>/a-proceso")
+@puede_editar
+def volcar_grabacion(gid):
+    d = request.get_json(silent=True) or {}
+    pid = (d.get("proceso") or "").strip()
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "proceso_no_existe"}), 404
+    u = usuario_actual()
+    if not _mio(p, u):
+        return jsonify({"error": "no_es_tuyo"}), 403
+
+    _guardar_version(pid, u["id"], "antes de volcar la entrevista grabada")
+    r = E.a_proceso(gid, pid, u["id"],
+                    llenar_campos=(request.get_json(silent=True) or {})
+                    .get("llenarCampos", True))
+    if r.get("error"):
+        return jsonify(r), 422
+    auditar("grabacion_volcada", "proceso", pid, f"{r['pasos']} pasos, {r['fotos']} fotos")
+    return jsonify(r)
+
+
+@api.delete("/grabaciones/<gid>")
+@puede_editar
+def borrar_grabacion(gid):
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+    D.execute("DELETE FROM grabaciones WHERE id=?", (gid,))
+    auditar("grabacion_borrada", "grabacion", gid)
+    return jsonify({"ok": True})
+
+
 @api.get("/indice")
 @login_required
 def indice_procesos():
@@ -1491,6 +1681,33 @@ def restaurar_version(pid, vid):
 # ═══════════════════════════════════════════════════════════════════════════
 # Evidencias (fotos y audios)
 # ═══════════════════════════════════════════════════════════════════════════
+
+def _guardar_media_bytes(pid, datos, ctype, nombre=""):
+    """Guarda un archivo que no vino de una subida, como un fotograma
+    sacado de un video. Devuelve su id, o el del que ya estaba si es
+    idéntico: reprocesar un video no debe duplicar las fotos."""
+    firma = hashlib.sha1(datos).hexdigest()
+    previo = D.row("SELECT id FROM media WHERE sha1=? AND proceso_id IS ?", (firma, pid))
+    if previo:
+        return previo["id"]
+
+    mid = _nuevo_id("m_")
+    if MEDIA_DIR:
+        os.makedirs(MEDIA_DIR, exist_ok=True)
+        ruta = os.path.join(MEDIA_DIR, mid)
+        with open(ruta, "wb") as fh:
+            fh.write(datos)
+        D.execute(
+            "INSERT INTO media (id, proceso_id, content_type, tamano, nombre, ruta, sha1) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (mid, pid, ctype, len(datos), nombre, ruta, firma))
+    else:
+        D.execute(
+            "INSERT INTO media (id, proceso_id, content_type, tamano, nombre, data, sha1) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (mid, pid, ctype, len(datos), nombre, D.binary(datos), firma))
+    return mid
+
 
 def _guardar_evidencia(pid, archivo, form, autor_id, origen="app"):
     """Núcleo compartido por la app y por la página de captura del celular.

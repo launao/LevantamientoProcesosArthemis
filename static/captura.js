@@ -19,6 +19,11 @@
 const T = window.CAPTURE_TOKEN;
 const URL_SUBIDA = '/api/capture/' + T + '/evidencias';
 
+// Cuánto se deja grabar de un tirón. Es el mismo número que en el
+// computador: si fueran distintos, la misma entrevista se cortaría o no
+// según desde dónde se grabe.
+const TOPE_GRABACION = 3600;
+
 const C = {
   info: null, error: null, campo: '',
   rec: null, recT: 0, recTimer: null, recId: null, trozos: [], nTrozo: 0, wake: null,
@@ -445,7 +450,10 @@ async function grabar() {
     C.recT++;
     const t = document.getElementById('gT');
     if (t) t.textContent = mmss(C.recT);
-    if (C.recT >= 1800) detener();
+    // El mismo tope que en el computador. Una entrevista de levantamiento
+    // rara vez pasa de ahí, y el texto de la pantalla promete una hora:
+    // cortar antes dejaría a la persona creyendo que grabó de más.
+    if (C.recT >= TOPE_GRABACION) detener();
   }, 1000);
 }
 

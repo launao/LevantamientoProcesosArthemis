@@ -672,3 +672,206 @@ def probar_llave(modelo=None):
         raise IAError("error_api", f"HTTP {e.code}")
     except Exception as e:
         raise IAError("sin_conexion", str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Entrevistas grabadas
+# ═══════════════════════════════════════════════════════════════════════════
+
+SISTEMA_ENTREVISTA = """Eres un analista de procesos experimentado. Recibes la \
+transcripción de una entrevista grabada en una clínica: alguien del equipo fue al \
+puesto de trabajo, grabó con el celular y la persona le fue explicando y mostrando \
+cómo hace su trabajo.
+
+Tu tarea tiene dos partes y la segunda es la que más valor tiene.
+
+PRIMERA: reconstruir el proceso tal como se hace hoy, no como debería hacerse.
+
+SEGUNDA: decir en qué minutos exactos hay que mirar el video. No viste las imágenes, \
+solo oíste. Tú sabes mejor que nadie dónde está lo que no se puede contar con \
+palabras: el formato que mencionó, la pantalla donde se traba, el cuaderno que usa \
+de respaldo. Pide esos momentos.
+
+Cómo reconocer un momento que vale una imagen:
+- Dice "este", "acá", "mira", "esto que ves": está señalando algo en pantalla.
+- Nombra un formato, una planilla, un cuaderno, un sello, una carpeta.
+- Describe un error, un mensaje, algo que no funciona.
+- Enumera campos que hay que llenar.
+- Cambia de sistema o de herramienta.
+No pidas momentos donde solo se conversa, se saluda o se divaga.
+
+Reglas:
+- No inventes. Si algo quedó confuso en el audio, dilo en 'dudas', no lo completes.
+- Los tiempos van en segundos desde el inicio, tomados de las marcas [mm:ss].
+- El paso a paso es lo que hace esta persona, con sus palabras y sus herramientas. \
+Si dice "le mando por WhatsApp", eso es un paso, no una informalidad que corregir.
+- Distingue lo que la persona hace siempre de lo que hace solo a veces.
+- Escribe en español de Colombia, claro. Quien lee esto coordina una clínica.
+
+Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor ni marcas de \
+código:
+
+{
+  "titulo": "cómo llamarías a este proceso",
+  "resumen": "4 a 6 líneas: qué hace esta persona y cuál es el problema real",
+  "quien_habla": "el cargo de quien explica, si se deduce",
+  "pasos": [
+    {"n": 1, "desde": 0, "hasta": 95,
+     "actividad": "qué hace, en una frase",
+     "detalle": "cómo lo hace, con sus palabras",
+     "sistema": "dónde: nombre del sistema, papel, teléfono, WhatsApp, o vacío",
+     "tiempo": "cuánto tarda, si lo dijo",
+     "es_excepcion": false}
+  ],
+  "momentos_para_ver": [
+    {"segundo": 872, "por_que": "menciona el formato de admisión que llena a mano",
+     "que_busco": "los campos del formato", "prioridad": "alta"}
+  ],
+  "dolores": [{"dolor": "...", "cuando": 1240, "impacto": "a qué afecta"}],
+  "herramientas": ["los sistemas y soportes que nombró"],
+  "personas_mencionadas": ["nombres o cargos de quienes intervienen"],
+  "dudas": ["lo que quedó sin aclarar y habría que volver a preguntar"],
+  "respuestas": {
+    "id_del_campo": "lo que la persona contestó, en sus palabras"
+  },
+  "calidad_audio": "buena | regular | mala"
+}
+
+Sobre 'respuestas': te doy abajo los campos del formulario que usa la clínica, con \
+su id y lo que preguntan. Llena los que la entrevista contesta de verdad. Deja fuera \
+los que no se tocaron: un campo vacío se nota y se arregla; uno inventado se cuela al \
+informe y nadie lo revisa.
+
+Pide entre 8 y 20 momentos. Menos deja el levantamiento sin evidencia; más es \
+pedir fotos de relleno."""
+
+
+SISTEMA_IMAGENES = """Eres el mismo analista. Ya reconstruiste el proceso oyendo la \
+entrevista y pediste ver ciertos momentos. Aquí están esas imágenes, sacadas del video \
+en los segundos que pediste.
+
+Míralas con atención y haz tres cosas:
+
+1. Confirma o corrige lo que habías entendido. Si una imagen contradice lo que creías, \
+dilo claramente: oír no es ver.
+2. Transcribe lo que se lee. Si hay un formato, enumera sus campos con el rótulo \
+exacto. Si hay una pantalla, nombra los botones y las casillas. Esto es lo que \
+alimenta el diseño del sistema nuevo, así que sé literal y completo.
+3. Di cuáles imágenes vale la pena guardar como evidencia del proceso y a qué paso \
+pertenece cada una. Una imagen borrosa o que no muestra nada útil se descarta.
+
+No inventes lo que no alcanzas a leer. Si una imagen salió movida o muy oscura, dilo \
+en 'sin_valor' con su número y por qué.
+
+Respondes ÚNICAMENTE con un objeto JSON válido, sin texto alrededor:
+
+{
+  "correcciones": [
+    {"paso": 3, "decia": "lo que habías entendido", "en_realidad": "lo que muestra la imagen",
+     "imagen": 5}
+  ],
+  "campos_formulario": [
+    {"formulario": "cómo lo llaman ellos", "imagen": 5,
+     "soporte": "papel | pantalla | cuaderno | Excel",
+     "campos": [{"nombre": "el rótulo exacto", "tipo": "texto | número | fecha | selección | firma | checkbox",
+                 "obligatorio": true, "quien_lo_llena": "cargo",
+                 "hoy_se_guarda": "sí, en el sistema | sí, en papel | no se guarda"}]}
+  ],
+  "evidencias": [
+    {"imagen": 5, "paso": 3, "titulo": "cómo nombrar esta foto",
+     "que_muestra": "una línea sobre qué se ve", "vale_la_pena": true}
+  ],
+  "sin_valor": [{"imagen": 9, "por_que": "salió movida, no se lee nada"}],
+  "hallazgos": ["lo que viste y nadie dijo en voz alta"]
+}"""
+
+
+def campos_para_llenar(plantilla):
+    """Los campos de texto del formulario, para que Claude los conteste.
+
+    Se dejan fuera las actividades —que van por su lado, con su estructura—
+    y los enlaces entre procesos, que exigen conocer el catálogo entero.
+    """
+    fuera = {"pasos", "procesos", "persona"}
+    salida = []
+    for sec in plantilla.get("secciones", []):
+        for c in sec.get("campos", []):
+            if c.get("tipo") in fuera:
+                continue
+            linea = f"- {c['id']}: {c.get('pregunta') or c.get('etiqueta', '')}"
+            if c.get("tipo") in ("lista", "multi") and c.get("opciones"):
+                linea += f"  [elige entre: {', '.join(c['opciones'][:12])}]"
+            salida.append(linea)
+    return salida
+
+
+def analizar_entrevista(transcripcion, duracion_seg, contexto="", campos=None,
+                        modelo=None):
+    """Primera pasada: solo la voz. Devuelve el proceso y qué mirar."""
+    llave = leer_llave()
+    if not llave:
+        raise IAError("sin_llave")
+
+    modelo = modelo or MODELO_DEFECTO
+    prompt = (
+        f"Entrevista de {int(duracion_seg//60)} minutos.\n"
+        + (f"\nContexto que ya tenemos:\n{contexto}\n" if contexto else "")
+        + (("\n=== CAMPOS DEL FORMULARIO ===\n" + "\n".join(campos) + "\n")
+           if campos else "")
+        + "\n=== TRANSCRIPCIÓN ===\n" + transcripcion)
+
+    data = _pedir(llave, modelo, prompt, max_tokens=16000,
+                  sistema=SISTEMA_ENTREVISTA)
+    texto = "".join(b.get("text", "") for b in data.get("content", [])
+                    if b.get("type") == "text")
+    uso = data.get("usage", {})
+    ctx = {"stop_reason": data.get("stop_reason"),
+           "modelo": data.get("model", modelo),
+           "tokens_salida": uso.get("output_tokens", 0),
+           "tokens_entrada": uso.get("input_tokens", 0),
+           "caracteres": len(texto)}
+    return _extraer_json(texto, ctx), ctx["modelo"], {
+        "entrada": ctx["tokens_entrada"], "salida": ctx["tokens_salida"],
+        "corte": ctx["stop_reason"]}
+
+
+def revisar_imagenes(analisis_previo, imagenes, modelo=None):
+    """Segunda pasada: las imágenes de los momentos pedidos.
+
+    imagenes: [{"n": 1, "segundo": 872, "por_que": "...", "datos": bytes, "tipo": "image/jpeg"}]
+    """
+    llave = leer_llave()
+    if not llave:
+        raise IAError("sin_llave")
+    if not imagenes:
+        raise IAError("sin_imagenes", "No se pudo sacar ningún fotograma del video.")
+
+    modelo = modelo or MODELO_DEFECTO
+    resumen = json.dumps({k: analisis_previo.get(k) for k in
+                          ("titulo", "resumen", "pasos", "herramientas")},
+                         ensure_ascii=False)[:12000]
+
+    contenido = [{"type": "text", "text":
+                  "Esto fue lo que entendiste oyendo la entrevista:\n\n" + resumen
+                  + "\n\nY estas son las imágenes que pediste:"}]
+    for img in imagenes:
+        contenido.append({"type": "text", "text":
+                          f"\nImagen {img['n']} — minuto {int(img['segundo']//60):02d}:"
+                          f"{int(img['segundo']%60):02d}. La pediste porque: {img.get('por_que','')}"})
+        contenido.append({"type": "image", "source": {
+            "type": "base64", "media_type": img.get("tipo", "image/jpeg"),
+            "data": base64.b64encode(img["datos"]).decode("ascii")}})
+
+    data = _pedir(llave, modelo, contenido, max_tokens=16000,
+                  sistema=SISTEMA_IMAGENES)
+    texto = "".join(b.get("text", "") for b in data.get("content", [])
+                    if b.get("type") == "text")
+    uso = data.get("usage", {})
+    ctx = {"stop_reason": data.get("stop_reason"),
+           "modelo": data.get("model", modelo),
+           "tokens_salida": uso.get("output_tokens", 0),
+           "tokens_entrada": uso.get("input_tokens", 0),
+           "caracteres": len(texto)}
+    return _extraer_json(texto, ctx), ctx["modelo"], {
+        "entrada": ctx["tokens_entrada"], "salida": ctx["tokens_salida"],
+        "corte": ctx["stop_reason"]}

@@ -978,3 +978,78 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
 @keyframes latir{50%{opacity:.25;transform:scale(.7)}}
 .kpi.alerta .n{color:var(--warn)}
 @media (max-width:640px){.ind-cola{left:14px;bottom:14px;padding:10px 14px;font-size:13.5px}}
+
+/* ── Entrevistas grabadas ─────────────────────── */
+.grabaciones{display:flex;flex-direction:column;gap:14px}
+.grab-card{background:var(--surface);border:1.5px solid var(--line);border-radius:var(--radius);
+  padding:18px 20px;box-shadow:var(--shadow)}
+.grab-card.listo{border-left:5px solid var(--ok)}
+.grab-card.error{border-left:5px solid var(--bad)}
+.grab-nom{font-size:18.5px;line-height:1.3;display:block;margin-bottom:3px}
+.grab-datos{display:flex;gap:26px;flex-wrap:wrap;padding:12px 0;margin-top:10px;
+  border-top:1px solid var(--line)}
+.grab-datos div{display:flex;flex-direction:column}
+.grab-datos b{font-size:18px}
+.grab-resumen{font-size:15.5px;line-height:1.6;color:var(--ink-2)}
+.girando{display:inline-block;animation:gira 1.2s linear infinite}
+@keyframes gira{to{transform:rotate(360deg)}}
+
+.pasos-grab{margin:0;padding-left:22px;line-height:1.5}
+.pasos-grab li{margin-bottom:14px}
+.pg-cab{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.pg-cab b{font-size:16px}
+.pg-det{font-size:15px;color:var(--ink-2);line-height:1.6;margin:4px 0}
+
+.galeria-grab{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+.galeria-grab figure{margin:0;border:1.5px solid var(--line);border-radius:10px;overflow:hidden}
+.galeria-grab img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;cursor:pointer}
+.galeria-grab figcaption{padding:9px 11px;background:var(--surface-2);font-size:13.5px;line-height:1.4}
+.galeria-grab .descartada{opacity:.5}
+.galeria-grab .mala{color:var(--bad);font-weight:600}
+
+.transcripcion{max-height:360px;overflow:auto;background:var(--surface-2);border-radius:9px;
+  padding:14px 16px;margin-top:8px;font-size:15px;line-height:1.65}
+.transcripcion p{margin:0 0 9px;display:flex;gap:10px}
+.t-min{color:var(--ink-3);font-variant-numeric:tabular-nums;font-size:13px;flex:none;
+  min-width:44px;padding-top:2px}
+
+.pasos-subir{display:flex;flex-direction:column;gap:16px;margin-top:6px}
+.ps{display:flex;gap:14px;align-items:flex-start}
+.ps-n{width:34px;height:34px;border-radius:99px;background:var(--brand);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:700;flex:none}
+.ps b{font-size:16px}
+
+/* ── Revisión de las fotos propuestas ─────────── */
+.rev-fotos{display:flex;flex-direction:column;gap:12px}
+.rf{display:grid;grid-template-columns:150px 1fr auto;gap:14px;align-items:center;
+  border:1.5px solid var(--line);border-radius:10px;padding:12px;background:var(--surface)}
+.rf.aprobada{border-color:var(--ok);background:color-mix(in srgb,var(--ok) 6%,transparent)}
+.rf.descartada{opacity:.55;border-style:dashed}
+.rf-img{position:relative}
+.rf-img img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:7px;cursor:pointer}
+.rf-min{position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,.72);color:#fff;
+  border-radius:5px;padding:1px 7px;font-size:12px;font-variant-numeric:tabular-nums}
+.rf-sello{position:absolute;right:6px;top:6px;width:26px;height:26px;border-radius:99px;
+  display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:15px}
+.rf-sello.ok{background:var(--ok)}
+.rf-sello.no{background:var(--bad)}
+.rf-txt{min-width:0}
+.rf-txt b{font-size:15.5px;display:block;margin-bottom:3px}
+.rf-acciones{display:flex;flex-direction:column;gap:6px}
+.rf-alts{grid-column:1/-1;display:flex;gap:9px;flex-wrap:wrap;padding-top:10px;
+  border-top:1px dashed var(--line)}
+.rf-alts.oculto{display:none}
+.rf-alt{border:1.5px solid var(--line-2);border-radius:8px;padding:0;overflow:hidden;
+  cursor:pointer;background:var(--surface);width:124px}
+.rf-alt:hover{border-color:var(--accent)}
+.rf-alt img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover}
+.rf-alt .tiny{display:block;padding:4px}
+@media (max-width:700px){.rf{grid-template-columns:1fr}.rf-acciones{flex-direction:row}}
+
+/* ── Corregir los pasos ───────────────────────── */
+.ep-paso{border:1.5px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.ep-cab{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.ep-n{width:30px;height:30px;border-radius:99px;background:var(--surface-2);
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex:none}
+.ep-cab input{flex:1}
+.ep-paso textarea{min-height:60px;font-size:15px;margin-bottom:8px}

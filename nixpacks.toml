@@ -1,0 +1,5 @@
+# Railway necesita ffmpeg para leer los videos de las entrevistas: sacar
+# los fotogramas de los momentos que Claude pide. Sin esto, todo lo demás
+# funciona salvo las imágenes.
+[phases.setup]
+nixPkgs = ["...", "ffmpeg"]

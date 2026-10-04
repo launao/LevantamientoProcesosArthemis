@@ -354,6 +354,7 @@ function render() {
         ${nav('tablero', '◱', esAdmin() ? 'Tablero' : 'Mi avance', v)}
         ${esAdmin() ? navConCuenta('revision', '✓', 'Revisión', v, porRevisar().length) : ''}
         ${esAdmin() ? nav('documentos', '📄', 'Documentos', v) : ''}
+        ${nav('entrevistas', '🎞', 'Entrevistas', v)}
         ${nav('procesos', '▤', 'Procesos', v)}
         ${nav('mapa', '⤳', 'Mapa', v)}
         ${esAdmin() ? nav('asignacion', '⇄', 'Asignación', v) : ''}
@@ -387,6 +388,7 @@ function render() {
                   asignacion: vistaAsignacion, equipo: vistaEquipo, agenda: vistaAgenda,
                   mapa: vistaMapa, avance: vistaAvanceClinica, revision: vistaRevision,
                   mapear: vistaPorMapear, documentos: vistaDocumentos,
+                  entrevistas: vistaEntrevistas,
                   plantilla: vistaPlantilla,
                   ajustes: vistaAjustes, cuenta: vistaAjustes };
   if (esClinica() && !['agenda', 'avance', 'mapear', 'documentos', 'procesos', 'proceso', 'mapa'].includes(v)) {
@@ -2293,6 +2295,13 @@ function vistaAjustes(m) {
         <button class="btn" id="pwOk">Cambiar contraseña</button>
       </div>
       ${esAdmin() ? `<div class="card" style="margin-bottom:14px">
+        <h3>Entrevistas grabadas</h3>
+        <p class="mut">Para pasar la voz a texto hace falta una llave de OpenAI o de
+          Deepgram. Cuesta unos 2.000 pesos por grabación de dos horas.</p>
+        <div id="vozConf" class="mut" style="margin-top:10px">Consultando…</div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
         <h3>Análisis con Claude</h3>
         <p class="mut">Con una llave de Anthropic, cada proceso puede pedir un análisis:
           resumen, paso a paso ordenado, mejoras, automatizaciones y conexiones sugeridas.
@@ -2354,7 +2363,7 @@ function vistaAjustes(m) {
     }
   };
 
-  if (esAdmin()) pintarConfigIA();
+  if (esAdmin()) { pintarConfigIA(); pintarConfigVoz(); }
 
   m.querySelectorAll('[data-tema]').forEach(b => b.onclick = () => {
     const t = b.dataset.tema;
@@ -5887,4 +5896,546 @@ function traducirError(e) {
     http_404: 'el proceso ya no existe'
   };
   return m[e] || (String(e || '').startsWith('http_') ? 'el servidor respondió con error' : (e || 'sin conexión'));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Entrevistas grabadas
+
+   El equipo graba con el celular mientras la persona explica. Aquí
+   llega lo que la app entendió de esa grabación: el paso a paso y las
+   fotos de los momentos que valían la pena. Nadie tiene que volver a
+   ver el video.
+   ═══════════════════════════════════════════════════════════════ */
+const ESTADOS_GRAB = {
+  subida:         { n: 'Recibida',       c: 'pendiente',   ayuda: 'Esperando turno.' },
+  transcribiendo: { n: 'Pasando a texto', c: 'en_curso',   ayuda: 'Escuchando la grabación. Esto es lo que más tarda.' },
+  analizando:     { n: 'Entendiendo',    c: 'en_curso',    ayuda: 'Armando el paso a paso de lo que oyó.' },
+  imagenes:       { n: 'Sacando fotos',  c: 'en_curso',    ayuda: 'Buscando en el video los momentos que pidió.' },
+  listo:          { n: 'Lista',          c: 'aprobado',    ayuda: 'Revísala y pásala al proceso.' },
+  error:          { n: 'Con problema',   c: 'en_revision', ayuda: '' }
+};
+
+async function vistaEntrevistas(m) {
+  m.innerHTML = `<div class="topbar"><h1>Entrevistas grabadas</h1></div>
+    <div class="mut">Cargando…</div>`;
+
+  let gs = [];
+  try { gs = (await api('/grabaciones')).grabaciones; } catch (_) {}
+
+  const trabajando = gs.some(g => ['subida', 'transcribiendo', 'analizando', 'imagenes']
+    .includes(g.estado));
+
+  m.innerHTML = `
+  <div class="topbar"><h1>Entrevistas grabadas</h1><div class="sp"></div>
+    <span class="tiny">${gs.length}</span>
+    <button class="btn p" id="comoSubir">Cómo subir una</button></div>
+
+  <div class="banner">
+    Graba la entrevista con el celular como siempre. Después, el programa saca
+    la voz del video y la manda acá: la app arma el paso a paso y saca sola las
+    fotos de los momentos que importan. <b>El video no se sube</b> — pesa cien
+    veces más que la voz y se queda en tu computador.
+  </div>
+
+  ${gs.length ? `<div class="grabaciones">${gs.map(g => tarjetaGrabacion(g)).join('')}</div>`
+    : `<div class="empty"><span class="e">🎞</span>
+        Todavía no hay ninguna.<br>
+        <span class="tiny">Usa el botón de arriba para ver cómo subirlas.</span></div>`}`;
+
+  document.getElementById('comoSubir').onclick = modalComoSubir;
+  m.querySelectorAll('[data-vergrab]').forEach(b =>
+    b.onclick = () => abrirGrabacion(b.dataset.vergrab));
+  m.querySelectorAll('[data-borrargrab]').forEach(b => b.onclick = async () => {
+    if (!confirm('Se borra lo que la app entendió de esta entrevista. El video tuyo no se toca. ¿Seguir?')) return;
+    await api('/grabaciones/' + b.dataset.borrargrab, { method: 'DELETE' });
+    vistaEntrevistas(m);
+  });
+
+  // Mientras haya alguna en proceso, la pantalla se refresca sola: el
+  // trabajo tarda minutos y nadie debería estar recargando a mano.
+  clearTimeout(S.tGrab);
+  if (trabajando) S.tGrab = setTimeout(() => {
+    if (S.vista === 'entrevistas') vistaEntrevistas(m);
+  }, 8000);
+}
+
+function tarjetaGrabacion(g) {
+  const e = ESTADOS_GRAB[g.estado] || ESTADOS_GRAB.subida;
+  const trabajando = ['subida', 'transcribiendo', 'analizando', 'imagenes'].includes(g.estado);
+  const a = g.analisis || {};
+
+  return `<div class="grab-card ${g.estado}">
+    <div class="flex" style="align-items:flex-start;gap:12px">
+      <div style="flex:1;min-width:0">
+        <b class="grab-nom">${esc(a.titulo || g.nombre)}</b>
+        <div class="tiny">${g.duracion ? Math.round(g.duracion / 60) + ' min · ' : ''}${
+          esc(fechaLarga(g.creado))}${g.procesoId ? ' · ya está en un proceso' : ''}</div>
+      </div>
+      <span class="pill ${e.c}">${trabajando ? '<span class="girando">◌</span> ' : ''}${e.n}</span>
+    </div>
+
+    ${g.estado === 'error'
+      ? `<div class="aviso-ia error" style="margin-top:10px">${esc(traducirErrorGrab(g.error))}</div>`
+      : trabajando
+        ? `<div class="tiny" style="margin-top:8px">${esc(e.ayuda)}</div>`
+        : `<div class="grab-datos">
+            <div><b>${(a.pasos || []).length || g.pasos || 0}</b><span class="tiny">pasos</span></div>
+            <div><b>${(g.momentos || []).length}</b><span class="tiny">fotos</span></div>
+            <div><b>${(a.dolores || []).length}</b><span class="tiny">dolores</span></div>
+            <div><b>${(a.dudas || []).length}</b><span class="tiny">por preguntar</span></div>
+          </div>
+          ${a.resumen ? `<div class="grab-resumen">${esc(recortar(a.resumen, 200))}</div>` : ''}`}
+
+    <div class="flex wrap" style="gap:9px;margin-top:12px">
+      ${g.estado === 'listo' ? `<button class="btn p" data-vergrab="${g.id}">Ver y pasar al proceso</button>` : ''}
+      ${g.estado === 'listo' ? `<button class="btn sm" data-vergrab="${g.id}">Leer la transcripción</button>` : ''}
+      <button class="btn sm danger right" data-borrargrab="${g.id}">Borrar</button>
+    </div>
+  </div>`;
+}
+
+function traducirErrorGrab(e) {
+  const c = String(e || '').split(':')[0];
+  return {
+    sin_llave: 'Falta configurar el servicio de voz en Ajustes.',
+    llave_invalida: 'La llave del servicio de voz no sirve. Revísala en Ajustes.',
+    sin_voz: 'No se encontró voz en la grabación. Puede que el video no tenga audio.',
+    audio_muy_grande: 'La grabación es muy larga para el servicio. Pártela en dos.',
+    limite_alcanzado: 'El servicio de voz está saturado. Vuelve a intentar en un rato.',
+    sin_conexion: 'El servidor no pudo comunicarse con el servicio de voz.',
+    respuesta_ilegible: 'El análisis se cortó. Vuelve a subirla.'
+  }[c] || ('No se pudo procesar: ' + e);
+}
+
+function modalComoSubir() {
+  modal(`<h3>Cómo subir una entrevista</h3>
+    <p class="mut" style="margin-top:-6px">
+      Se hace una vez y queda listo para siempre.</p>
+
+    <div class="pasos-subir">
+      <div class="ps"><span class="ps-n">1</span>
+        <div><b>Pasa el video del celular al computador</b>
+          <div class="tiny">Por cable, AirDrop o como lo hagan normalmente.
+            Déjalo en una carpeta, por ejemplo «Entrevistas».</div></div></div>
+
+      <div class="ps"><span class="ps-n">2</span>
+        <div><b>Baja el programa, una sola vez</b>
+          <div class="tiny">Es un archivo. Guárdalo en el Escritorio.</div>
+          <a class="btn sm" href="/static/preparar-entrevistas.command"
+             download="preparar-entrevistas.command" style="margin-top:7px">⤓ Bajar el programa</a>
+          <div class="tiny" style="margin-top:7px">
+            La primera vez, Mac pregunta si confías en el archivo:
+            <b>clic derecho sobre él → Abrir → Abrir</b>. Solo la primera vez.</div></div></div>
+
+      <div class="ps"><span class="ps-n">3</span>
+        <div><b>Doble clic y arrastra los videos</b>
+          <div class="tiny">Se abre una ventana negra. Arrastra ahí los videos
+            —puedes soltar varios a la vez— y presiona Enter.</div></div></div>
+
+      <div class="ps"><span class="ps-n">4</span>
+        <div><b>Listo</b>
+          <div class="tiny">El programa saca la voz y la manda. Tus videos no
+            se mueven ni se borran. En unos minutos aparece el paso a paso aquí.</div></div></div>
+    </div>
+
+    <div class="aviso-ia" style="margin-top:16px">
+      <b>¿Por qué no se sube el video?</b><br>
+      Una grabación de dos horas pesa unos 6 GB; su voz, 28 MB. Subir el video
+      tomaría una hora y no agregaría nada: lo que hace falta es lo que la persona
+      explicó, y las pocas imágenes de los momentos que valen la pena, que el
+      programa saca después.
+    </div>
+
+    <div class="flex" style="margin-top:16px"><button class="btn right" data-cerrar>Cerrar</button></div>`);
+}
+
+/** La entrevista abierta: lo que se entendió, lo que se vio y qué hacer con eso. */
+async function abrirGrabacion(gid) {
+  modal('<h3>Cargando…</h3>');
+  let g;
+  try { g = (await api('/grabaciones/' + gid)).grabacion; }
+  catch (_) { cerrarModal(); toast('No se pudo abrir'); return; }
+
+  const a = g.analisis || {};
+  const rev = a.revision_imagenes || {};
+  const l = x => Array.isArray(x) ? x : [];
+  const porImagen = {};
+  l(rev.evidencias).forEach(e => { porImagen[e.imagen] = e; });
+  const descartadas = new Set(l(rev.sin_valor).map(x => x.imagen));
+
+  const momento = n => (g.momentos || []).find(m => m.n === n);
+
+  cerrarModal();
+  modal(`<h3>${esc(a.titulo || g.nombre)}</h3>
+    <div class="flex wrap" style="gap:10px;margin:-6px 0 14px">
+      <span class="tiny">${Math.round((g.duracion || 0) / 60)} min de grabación ·
+        ${esc(fechaLarga(g.creado))} · ${esc(nombrePersona(g.subidoPor))}</span>
+      ${a.calidad_audio ? `<span class="et">audio ${esc(a.calidad_audio)}</span>` : ''}
+    </div>
+
+    ${a.resumen ? `<section class="ia-bloque"><h4>De qué se trata</h4>
+      <p>${esc(a.resumen)}</p>
+      ${a.quien_habla ? `<div class="tiny">Lo explicó: ${esc(a.quien_habla)}</div>` : ''}
+    </section>` : ''}
+
+    ${l(a.pasos).length ? `<section class="ia-bloque">
+      <div class="ds-cab">
+        <h4>El paso a paso que entendió</h4>
+        <button class="btn sm" id="editarPasos">✎ Corregir</button>
+      </div>
+      <p class="tiny">Cada paso dice en qué minuto se explicó, por si quieres volver a oírlo.
+        Si algo quedó mal entendido, corrígelo antes de pasarlo al proceso.</p>
+      <ol class="pasos-grab" id="listaPasos">${l(a.pasos).map(p => `<li>
+        <div class="pg-cab">
+          <b>${esc(p.actividad || '')}</b>
+          ${p.es_excepcion ? '<span class="et">solo a veces</span>' : ''}
+          <span class="tiny right">${mmss(p.desde)}</span>
+        </div>
+        ${p.detalle ? `<div class="pg-det">${esc(p.detalle)}</div>` : ''}
+        <div class="tiny">${[p.sistema, p.tiempo].filter(Boolean).map(esc).join(' · ')}</div>
+      </li>`).join('')}</ol>
+    </section>` : ''}
+
+    ${(g.momentos || []).length ? `<section class="ia-bloque" id="revFotos">
+      <h4>Las fotos que sacó del video</h4>
+      <p class="tiny">
+        <b>Di cuáles sirven.</b> Solo las que apruebes entran al proceso.
+        Si una no muestra lo que hacía falta, mira las otras tomas del mismo momento.
+      </p>
+      <div class="rev-fotos">${(g.momentos || []).map(m =>
+        tarjetaMomento(m, porImagen[m.n], descartadas.has(m.n))).join('')}</div>
+      <div class="flex wrap" style="gap:8px;margin-top:12px">
+        <button class="btn sm" data-todas="si">Aprobar todas</button>
+        <button class="btn sm" data-todas="no">Descartar todas</button>
+        <span class="tiny right" id="cuentaRev"></span>
+      </div>
+    </section>` : ''}
+
+    ${l(rev.campos_formulario).length ? `<section class="ia-bloque">
+      <h4>Los formatos que alcanzó a leer</h4>
+      ${l(rev.campos_formulario).map(f => `<div class="caja-doc">
+        <b>${esc(f.formulario || '')}</b> <span class="tiny">${esc(f.soporte || '')}</span>
+        <div class="tw"><table class="t"><thead><tr>
+          <th>Campo</th><th>Tipo</th><th>Quién lo llena</th><th>¿Se guarda hoy?</th>
+        </tr></thead><tbody>${l(f.campos).map(k => `<tr>
+          <td><b>${esc(k.nombre || '')}</b></td><td>${esc(k.tipo || '')}</td>
+          <td>${esc(k.quien_lo_llena || '')}</td>
+          <td><span class="guarda ${(k.hoy_se_guarda || '').startsWith('no') ? 'no' : ''}">${
+            esc(k.hoy_se_guarda || '—')}</span></td>
+        </tr>`).join('')}</tbody></table></div></div>`).join('')}
+    </section>` : ''}
+
+    ${Object.keys(a.respuestas || {}).length ? `<section class="ia-bloque">
+      <h4>Lo que va a llenar en el formulario</h4>
+      <p class="tiny">Respuestas sacadas de la entrevista. Solo entran donde el campo
+        esté vacío: nada de lo que ya escribiste se pisa.</p>
+      <div class="tw"><table class="t"><tbody>${Object.entries(a.respuestas).map(([k, v]) => {
+        const campo = (S.plantilla.secciones || []).flatMap(s2 => s2.campos || [])
+          .find(c => c.id === k);
+        return `<tr><td style="width:200px"><b>${esc((campo && campo.etiqueta) || k)}</b></td>
+          <td>${esc(recortar(Array.isArray(v) ? v.join(', ') : String(v), 220))}</td></tr>`;
+      }).join('')}</tbody></table></div>
+    </section>` : ''}
+
+    ${l(rev.correcciones).length ? `<section class="ia-bloque">
+      <h4>Lo que corrigió al ver las imágenes</h4>
+      <p class="tiny">Había entendido una cosa oyendo y la foto mostró otra.</p>
+      <ul class="ia-lista">${l(rev.correcciones).map(c => `<li>
+        <b>Paso ${esc(c.paso)}</b>
+        <div class="tiny">creía: ${esc(c.decia || '')}</div>
+        <div>en realidad: ${esc(c.en_realidad || '')}</div></li>`).join('')}</ul>
+    </section>` : ''}
+
+    ${l(a.dolores).length ? `<section class="ia-bloque"><h4>Lo que le complica el trabajo</h4>
+      <ul class="ia-lista">${l(a.dolores).map(d => `<li>
+        <b>${esc(d.dolor || '')}</b> <span class="tiny">${mmss(d.cuando)}</span>
+        <div class="tiny">${esc(d.impacto || '')}</div></li>`).join('')}</ul>
+    </section>` : ''}
+
+    ${l(a.dudas).length ? `<section class="ia-bloque"><h4>Quedó sin aclarar</h4>
+      <p class="tiny">Para la próxima visita, o para preguntar por WhatsApp.</p>
+      <ul class="ia-lista">${l(a.dudas).map(d => `<li>${esc(d)}</li>`).join('')}</ul>
+    </section>` : ''}
+
+    ${l(rev.hallazgos).length ? `<section class="ia-bloque"><h4>Lo que vio y nadie dijo</h4>
+      <ul class="ia-lista">${l(rev.hallazgos).map(h => `<li>${esc(h)}</li>`).join('')}</ul>
+    </section>` : ''}
+
+    <details class="nota-plegable" style="margin-top:14px">
+      <summary>Ver la transcripción completa</summary>
+      <div class="transcripcion">${(g.transcripcion || []).map(s =>
+        `<p><span class="t-min">${mmss(s.inicio)}</span>${esc(s.texto)}</p>`).join('')
+        || '<div class="mut">No se guardó.</div>'}</div>
+    </details>
+
+    <div class="doc-acciones">
+      ${g.procesoId
+        ? '<div class="aviso-ia ok">Ya se pasó a un proceso.</div>'
+        : `<div class="tiny" style="flex:1 1 100%">
+             Al pasarla al proceso, los pasos se agregan al final de las actividades
+             y las fotos quedan colgadas de su paso. Nada de lo que ya hay se pisa.
+           </div>
+           <select id="grabProceso" style="max-width:280px">
+             <option value="">¿A qué proceso?</option>
+             ${S.procesos.filter(p => puedeEditar() && (esAdmin() || p.responsable === S.yo.id))
+               .map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}
+           </select>
+           <button class="btn p" id="grabVolcar">Pasar al proceso</button>`}
+      <button class="btn right" data-cerrar>Cerrar</button>
+    </div>`, box => {
+
+    conectarRevisionFotos(box, gid, g);
+
+    const ep = box.querySelector('#editarPasos');
+    if (ep) ep.onclick = () => modalEditarPasos(gid, g, box);
+
+    const bv = box.querySelector('#grabVolcar');
+    if (bv) bv.onclick = async () => {
+      const pid = box.querySelector('#grabProceso').value;
+      if (!pid) { toast('Elige a qué proceso'); return; }
+      bv.disabled = true; bv.textContent = 'Pasando…';
+      try {
+        const r = await api('/grabaciones/' + gid + '/a-proceso',
+                            { method: 'POST', body: { proceso: pid } });
+        const d = await api('/procesos');
+        S.procesos = d.procesos;
+        cerrarModal();
+        abrirProceso(pid);
+        toast(`${r.pasos} paso(s) y ${r.fotos} foto(s) agregados`);
+      } catch (_) {
+        toast('No se pudo pasar al proceso');
+        bv.disabled = false; bv.textContent = 'Pasar al proceso';
+      }
+    };
+  });
+}
+
+function mmss(seg) {
+  const s = Math.max(0, Math.round(Number(seg) || 0));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** La llave del servicio de voz. Igual que la de Claude: entra y no vuelve a salir. */
+async function pintarConfigVoz() {
+  const caja = document.getElementById('vozConf');
+  if (!caja) return;
+  let e;
+  try { e = await api('/voz/estado'); }
+  catch (_) { caja.innerHTML = '<div class="mut">No se pudo consultar.</div>'; return; }
+
+  // Una respuesta a medias no debe dejar Ajustes en blanco: puede pasar
+  // si el servidor viene de una versión anterior o devolvió un error.
+  const vacio = { configurada: false, llave: '' };
+  e = Object.assign({ activo: null, openai: vacio, deepgram: vacio }, e || {});
+  ['openai', 'deepgram'].forEach(k => { e[k] = Object.assign({}, vacio, e[k] || {}); });
+
+  const datos = {
+    openai: { n: 'OpenAI (Whisper)', donde: 'platform.openai.com → API keys',
+              nota: 'Entiende mejor el acento y los nombres propios. ~2.900 pesos por 2 h.' },
+    deepgram: { n: 'Deepgram', donde: 'console.deepgram.com',
+                nota: 'Más barato y más rápido, y separa quién habla. ~2.100 pesos por 2 h.' }
+  };
+
+  caja.innerHTML = `
+    ${e.activo && datos[e.activo]
+      ? `<div class="aviso-ia ok">Funcionando con <b>${esc(datos[e.activo].n)}</b>.</div>`
+      : '<div class="aviso-ia">Sin llave no se pueden procesar entrevistas grabadas.</div>'}
+
+    <div class="grid g2" style="margin-top:12px">
+      ${Object.entries(datos).map(([k, d]) => `<div class="caja-doc">
+        <b>${esc(d.n)}</b>
+        ${e[k].configurada ? `<span class="et impacto-alto">${esc(e[k].llave)}</span>` : ''}
+        <div class="tiny" style="margin:4px 0 8px">${esc(d.nota)}<br>Se saca en ${esc(d.donde)}</div>
+        <input type="password" data-vozllave="${k}" placeholder="${e[k].configurada ? 'Reemplazar' : 'Pegar la llave'}"
+          autocomplete="off" style="font-size:14px">
+        <div class="flex wrap" style="gap:7px;margin-top:7px">
+          <button class="btn sm" data-vozguardar="${k}">Guardar</button>
+          ${e[k].configurada ? `<button class="btn sm danger" data-vozquitar="${k}">Quitar</button>` : ''}
+        </div>
+      </div>`).join('')}
+    </div>`;
+
+  caja.querySelectorAll('[data-vozguardar]').forEach(b => b.onclick = async () => {
+    const k = b.dataset.vozguardar;
+    const v = caja.querySelector(`[data-vozllave="${k}"]`).value.trim();
+    if (!v) { toast('Pega la llave primero'); return; }
+    try {
+      await api('/voz/llave', { method: 'PUT', body: { proveedor: k, llave: v } });
+      toast('Llave guardada'); pintarConfigVoz();
+    } catch (_) { toast('No se pudo guardar'); }
+  });
+
+  caja.querySelectorAll('[data-vozquitar]').forEach(b => b.onclick = async () => {
+    await api('/voz/llave', { method: 'PUT', body: { proveedor: b.dataset.vozquitar, llave: '' } });
+    toast('Llave quitada'); pintarConfigVoz();
+  });
+}
+
+/** Una foto propuesta, con su veredicto y sus alternativas. */
+function tarjetaMomento(m, info, claudeLaDescarto) {
+  const d = m.decision || '';
+  const alts = m.alternativas || [];
+  return `<div class="rf ${d === 'si' ? 'aprobada' : d === 'no' ? 'descartada' : ''}"
+               data-momento="${m.n}">
+    <div class="rf-img">
+      <img src="/media/${m.mediaId}" loading="lazy" data-big="/media/${m.mediaId}">
+      <span class="rf-min">${mmss(m.segundo)}</span>
+      ${d === 'si' ? '<span class="rf-sello ok">✓</span>' : ''}
+      ${d === 'no' ? '<span class="rf-sello no">✕</span>' : ''}
+    </div>
+    <div class="rf-txt">
+      <b>${esc((info && info.titulo) || m.que_busco || 'Momento ' + m.n)}</b>
+      <div class="tiny">${esc((info && info.que_muestra) || m.por_que || '')}</div>
+      ${claudeLaDescarto && !d
+        ? '<div class="tiny mala">Claude la vio movida, pero decide tú</div>' : ''}
+    </div>
+    <div class="rf-acciones">
+      <button class="btn sm ${d === 'si' ? 'p' : ''}" data-si="${m.n}">✓ Sirve</button>
+      <button class="btn sm ${d === 'no' ? 'danger' : ''}" data-no="${m.n}">✕ No</button>
+      ${alts.length ? `<button class="btn sm" data-otras="${m.n}">Otras tomas (${alts.length})</button>` : ''}
+    </div>
+    ${alts.length ? `<div class="rf-alts oculto" data-alts="${m.n}">
+      ${alts.map(a => `<button class="rf-alt" data-cambiar="${m.n}" data-media="${a.mediaId}">
+        <img src="/media/${a.mediaId}" loading="lazy">
+        <span class="tiny">${mmss(a.segundo)}</span>
+      </button>`).join('')}
+    </div>` : ''}
+  </div>`;
+}
+
+/** Conecta los botones de la revisión de fotos. */
+function conectarRevisionFotos(box, gid, g) {
+  const contar = () => {
+    const si = (g.momentos || []).filter(m => m.decision === 'si').length;
+    const no = (g.momentos || []).filter(m => m.decision === 'no').length;
+    const falta = (g.momentos || []).length - si - no;
+    const eco = box.querySelector('#cuentaRev');
+    if (eco) eco.textContent = falta
+      ? `${si} aprobadas · ${no} descartadas · ${falta} sin revisar`
+      : `${si} aprobadas de ${(g.momentos || []).length}`;
+    const bv = box.querySelector('#grabVolcar');
+    if (bv) bv.textContent = si ? `Pasar al proceso (${si} fotos)` : 'Pasar al proceso';
+  };
+
+  const decidir = async (n, decision, mediaId) => {
+    try {
+      const r = await api(`/grabaciones/${gid}/momentos/${n}`,
+                          { method: 'POST', body: { decision, mediaId } });
+      const i = (g.momentos || []).findIndex(m => m.n === n);
+      if (i >= 0) g.momentos[i] = r.momento;
+      const tarjeta = box.querySelector(`[data-momento="${n}"]`);
+      if (tarjeta) {
+        const info = ((g.analisis.revision_imagenes || {}).evidencias || [])
+          .find(e => e.imagen === n);
+        const descartadas = new Set((((g.analisis.revision_imagenes || {}).sin_valor) || [])
+          .map(x => x.imagen));
+        tarjeta.outerHTML = tarjetaMomento(r.momento, info, descartadas.has(n));
+        conectarRevisionFotos(box, gid, g);
+      }
+      contar();
+    } catch (_) { toast('No se pudo guardar'); }
+  };
+
+  box.querySelectorAll('[data-si]').forEach(b => b.onclick = () => decidir(+b.dataset.si, 'si'));
+  box.querySelectorAll('[data-no]').forEach(b => b.onclick = () => decidir(+b.dataset.no, 'no'));
+  box.querySelectorAll('[data-cambiar]').forEach(b => b.onclick = () =>
+    decidir(+b.dataset.cambiar, '', b.dataset.media));
+
+  box.querySelectorAll('[data-otras]').forEach(b => b.onclick = () => {
+    const caja = box.querySelector(`[data-alts="${b.dataset.otras}"]`);
+    if (caja) caja.classList.toggle('oculto');
+  });
+
+  box.querySelectorAll('[data-todas]').forEach(b => b.onclick = async () => {
+    const d = b.dataset.todas;
+    for (const m of (g.momentos || [])) await decidir(m.n, d);
+  });
+
+  box.querySelectorAll('[data-big]').forEach(img =>
+    img.onclick = () => lightbox(img.dataset.big));
+
+  contar();
+}
+
+/** Corregir el paso a paso antes de que entre al proceso. */
+function modalEditarPasos(gid, g, cajaPadre) {
+  const pasos = JSON.parse(JSON.stringify((g.analisis || {}).pasos || []));
+
+  const pintar = box => {
+    box.querySelector('#epLista').innerHTML = pasos.map((p, i) => `
+      <div class="ep-paso" data-i="${i}">
+        <div class="ep-cab">
+          <span class="ep-n">${i + 1}</span>
+          <input type="text" data-act="${i}" value="${esc(p.actividad || '')}"
+            placeholder="Qué hace">
+          <button class="btn sm ic" data-sube="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="btn sm ic" data-baja="${i}" ${i === pasos.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="btn quitar" data-quita="${i}">✕</button>
+        </div>
+        <textarea data-det="${i}" placeholder="Cómo lo hace, con sus palabras">${esc(p.detalle || '')}</textarea>
+        <div class="grid g3" style="gap:8px">
+          <input type="text" data-sis="${i}" value="${esc(p.sistema || '')}" placeholder="Dónde: sistema, papel…">
+          <input type="text" data-tie="${i}" value="${esc(p.tiempo || '')}" placeholder="Cuánto tarda">
+          <label class="flex" style="gap:8px;font-size:14px;cursor:pointer">
+            <input type="checkbox" data-exc="${i}" ${p.es_excepcion ? 'checked' : ''}
+              style="width:20px;height:20px;margin:0">
+            Solo a veces
+          </label>
+        </div>
+      </div>`).join('');
+
+    const leer = () => pasos.forEach((p, i) => {
+      const v = (q) => (box.querySelector(`[data-${q}="${i}"]`) || {}).value;
+      p.actividad = v('act') ?? p.actividad;
+      p.detalle = v('det') ?? p.detalle;
+      p.sistema = v('sis') ?? p.sistema;
+      p.tiempo = v('tie') ?? p.tiempo;
+      const ex = box.querySelector(`[data-exc="${i}"]`);
+      if (ex) p.es_excepcion = ex.checked;
+    });
+
+    box.querySelectorAll('[data-sube]').forEach(b => b.onclick = () => {
+      leer(); const i = +b.dataset.sube;
+      [pasos[i - 1], pasos[i]] = [pasos[i], pasos[i - 1]]; pintar(box);
+    });
+    box.querySelectorAll('[data-baja]').forEach(b => b.onclick = () => {
+      leer(); const i = +b.dataset.baja;
+      [pasos[i + 1], pasos[i]] = [pasos[i], pasos[i + 1]]; pintar(box);
+    });
+    box.querySelectorAll('[data-quita]').forEach(b => b.onclick = () => {
+      leer(); pasos.splice(+b.dataset.quita, 1); pintar(box);
+    });
+    box._leer = leer;
+  };
+
+  modal(`<h3>Corregir el paso a paso</h3>
+    <p class="mut" style="margin-top:-6px">
+      Claude oyó bien, pero no estuvo ahí. Ajusta lo que haga falta: el orden,
+      la redacción, o quita lo que era una digresión.</p>
+    <div id="epLista"></div>
+    <button class="btn sm" id="epAgregar" style="margin-top:10px">+ Agregar un paso</button>
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" data-cerrar>Cancelar</button>
+      <button class="btn p right" id="epGuardar">Guardar los cambios</button>
+    </div>`, box => {
+    pintar(box);
+
+    box.querySelector('#epAgregar').onclick = () => {
+      box._leer();
+      pasos.push({ actividad: '', detalle: '', sistema: '', tiempo: '', desde: 0 });
+      pintar(box);
+    };
+
+    box.querySelector('#epGuardar').onclick = async () => {
+      box._leer();
+      const limpios = pasos.filter(p => (p.actividad || '').trim());
+      if (!limpios.length) { toast('Tiene que quedar al menos un paso'); return; }
+      try {
+        await api(`/grabaciones/${gid}/pasos`, { method: 'PUT', body: { pasos: limpios } });
+        cerrarModal();
+        abrirGrabacion(gid);
+        toast(`${limpios.length} paso(s) guardados`);
+      } catch (_) { toast('No se pudo guardar'); }
+    };
+  });
 }

@@ -56,6 +56,13 @@ class _Limpiador(HTMLParser):
             self.mudo += 1
             return
         if tag not in ETIQUETAS:
+            # No es una etiqueta de formato. Puede ser un intento de ataque,
+            # pero también algo que alguien escribió a mano: "la tecla
+            # <Enter>", "el campo <nombre del paciente>". Borrarlo sin más
+            # perdería texto en silencio, así que se muestra tal cual,
+            # escapado: se lee igual que se escribió y no ejecuta nada.
+            if self.mudo == 0:
+                self.partes.append(escape(self.get_starttag_text() or f"<{tag}>"))
             return
         estilo = ""
         for nombre, valor in attrs:
@@ -72,6 +79,10 @@ class _Limpiador(HTMLParser):
             self.mudo = max(0, self.mudo - 1)
             return
         if tag not in ETIQUETAS or tag in VACIAS:
+            # El cierre de algo escrito a mano (</nombre>) se muestra igual
+            # que su apertura, por la misma razón.
+            if tag not in ETIQUETAS and self.mudo == 0:
+                self.partes.append(escape(f"</{tag}>"))
             return
         if tag in self.abiertas:
             # Cierra todo lo que quedó abierto por dentro, para no devolver

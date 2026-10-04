@@ -137,6 +137,23 @@ def _ddl():
               creado      {ts}
             )""",
 
+        f"""CREATE TABLE IF NOT EXISTS grabaciones (
+              id           {txt} PRIMARY KEY,
+              proceso_id   {txt},
+              nombre       {txt},
+              duracion     {intt} DEFAULT 0,
+              estado       {txt} DEFAULT 'subida',
+              transcripcion {txt},
+              analisis     {txt},
+              momentos     {txt},
+              error        {txt},
+              subido_por   {txt},
+              origen_bytes {intt} DEFAULT 0,
+              audio_bytes  {intt} DEFAULT 0,
+              creado       {ts},
+              actualizado  {ts}
+            )""",
+
         f"""CREATE TABLE IF NOT EXISTS analisis_lote (
               id          {txt} PRIMARY KEY,
               procesos    {txt} NOT NULL,
@@ -207,6 +224,7 @@ def _ddl():
         "CREATE INDEX IF NOT EXISTS ix_ver_proc ON versiones(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_ana_proc ON analisis(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_com_doc ON comentarios(documento_id)",
+        "CREATE INDEX IF NOT EXISTS ix_grab_proc ON grabaciones(proceso_id)",
         "CREATE INDEX IF NOT EXISTS ix_share_proc ON share_tokens(proceso_id)",
     ]
 
