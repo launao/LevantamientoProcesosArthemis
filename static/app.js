@@ -5999,7 +5999,12 @@ function tarjetaGrabacion(g) {
       <div style="flex:1;min-width:0">
         <b class="grab-nom">${esc(a.titulo || g.nombre)}</b>
         <div class="tiny">${g.duracion ? Math.round(g.duracion / 60) + ' min · ' : ''}${
-          esc(fechaLarga(g.creado))}${g.procesoId ? ' · ya está en un proceso' : ''}</div>
+          esc(fechaLarga(g.creado))}${g.procesoId
+            ? ` · ${g.volcada ? 'ya entró en' : 'es de'} ${esc(etiquetaProceso(g.procesoId))}`
+            : ''}</div>
+        ${g.estado === 'listo' && !g.volcada
+          ? `<div class="tiny av">Revisada o a medio revisar, pero
+               <b>todavía no se ha enviado</b> al proceso.</div>` : ''}
       </div>
       <span class="pill ${e.c}">${trabajando ? '<span class="girando">◌</span> ' : ''}${e.n}</span>
     </div>
@@ -6017,7 +6022,8 @@ function tarjetaGrabacion(g) {
           ${a.resumen ? `<div class="grab-resumen">${esc(recortar(a.resumen, 200))}</div>` : ''}`}
 
     <div class="flex wrap" style="gap:9px;margin-top:12px">
-      ${g.estado === 'listo' ? `<button class="btn p" data-vergrab="${g.id}">Ver y pasar al proceso</button>` : ''}
+      ${g.estado === 'listo' ? `<button class="btn p" data-vergrab="${g.id}">${
+        g.volcada ? 'Ver la entrevista' : 'Revisar y enviar al proceso'}</button>` : ''}
       ${g.estado === 'listo' ? `<button class="btn sm" data-vergrab="${g.id}">Leer la transcripción</button>` : ''}
       <button class="btn sm danger right" data-borrargrab="${g.id}">Borrar</button>
     </div>
@@ -6213,18 +6219,28 @@ async function abrirGrabacion(gid) {
     </details>
 
     <div class="doc-acciones">
-      ${g.procesoId
-        ? '<div class="aviso-ia ok">Ya se pasó a un proceso.</div>'
-        : `<div class="tiny" style="flex:1 1 100%">
-             Al pasarla al proceso, los pasos se agregan al final de las actividades
-             y las fotos quedan colgadas de su paso. Nada de lo que ya hay se pisa.
+      ${g.volcada
+        ? `<div class="aviso-ia ok" style="flex:1 1 100%">
+             Ya entró en el proceso ${esc(etiquetaProceso(g.procesoId))}
+             ${g.volcadaEn ? '· ' + esc(fechaLarga(g.volcadaEn)) : ''}.
+             Los pasos y las fotos están allá; lo que cambies aquí ya no viaja.
            </div>
-           <select id="grabProceso" style="max-width:280px">
+           <button class="btn p" data-verproc="${g.procesoId}">Abrir el proceso</button>`
+        : `<div class="tiny" style="flex:1 1 100%">
+             <b>Relaciónala con su proceso por el código.</b> Puedes guardarla sin
+             enviar y seguir mañana: lo aprobado queda guardado. Al enviarla, los
+             pasos se agregan al final de las actividades y las fotos quedan
+             colgadas de su paso. Nada de lo que ya hay se pisa.
+           </div>
+           <input type="search" id="grabBuscaProc" placeholder="Busca por código o nombre"
+                  style="max-width:220px">
+           <select id="grabProceso" style="max-width:300px">
              <option value="">¿A qué proceso?</option>
-             ${S.procesos.filter(p => puedeEditar() && (esAdmin() || p.responsable === S.yo.id))
-               .map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}
+             ${procesosQuePuedoTocar().map(p => `<option value="${p.id}"
+               ${p.id === g.procesoId ? 'selected' : ''}>${esc(etiquetaProceso(p.id))}</option>`).join('')}
            </select>
-           <button class="btn p" id="grabVolcar">Pasar al proceso</button>`}
+           <button class="btn" id="grabGuardar">Guardar sin enviar</button>
+           <button class="btn p" id="grabVolcar">Enviar al proceso</button>`}
       <button class="btn right" data-cerrar>Cerrar</button>
     </div>`, box => {
 
@@ -6233,11 +6249,43 @@ async function abrirGrabacion(gid) {
     const ep = box.querySelector('#editarPasos');
     if (ep) ep.onclick = () => modalEditarPasos(gid, g, box);
 
+    // El buscador filtra el desplegable sin recargar nada: con treinta
+    // procesos, encontrar el código a ojo es lo que más cansa.
+    const busca = box.querySelector('#grabBuscaProc');
+    if (busca) busca.oninput = () => {
+      const q = busca.value.trim().toLowerCase();
+      box.querySelectorAll('#grabProceso option').forEach(o => {
+        o.hidden = !!q && !!o.value && !o.textContent.toLowerCase().includes(q);
+      });
+    };
+
+    const vp = box.querySelector('[data-verproc]');
+    if (vp) vp.onclick = () => { cerrarModal(); abrirProceso(vp.dataset.verproc); };
+
+    const bg = box.querySelector('#grabGuardar');
+    if (bg) bg.onclick = async () => {
+      const pid = box.querySelector('#grabProceso').value;
+      bg.disabled = true;
+      try {
+        await api('/grabaciones/' + gid + '/proceso',
+                  { method: 'POST', body: { proceso: pid } });
+        toast(pid ? 'Guardada sin enviar. Puedes seguir mañana.'
+                  : 'Guardada, todavía sin proceso.');
+        cerrarModal();
+        if (S.vista === 'entrevistas') render();
+      } catch (_) { toast('No se pudo guardar'); bg.disabled = false; }
+    };
+
     const bv = box.querySelector('#grabVolcar');
     if (bv) bv.onclick = async () => {
       const pid = box.querySelector('#grabProceso').value;
       if (!pid) { toast('Elige a qué proceso'); return; }
-      bv.disabled = true; bv.textContent = 'Pasando…';
+      const sinRevisar = (g.momentos || []).filter(m => !m.decision).length;
+      if (sinRevisar && !confirm(
+            `Quedan ${sinRevisar} foto(s) sin revisar: esas no entran. `
+            + '¿Enviar así? Si prefieres, usa «Guardar sin enviar» y termina después.'))
+        return;
+      bv.disabled = true; bv.textContent = 'Enviando…';
       try {
         const r = await api('/grabaciones/' + gid + '/a-proceso',
                             { method: 'POST', body: { proceso: pid } });
@@ -6246,12 +6294,31 @@ async function abrirGrabacion(gid) {
         cerrarModal();
         abrirProceso(pid);
         toast(`${r.pasos} paso(s) y ${r.fotos} foto(s) agregados`);
-      } catch (_) {
-        toast('No se pudo pasar al proceso');
-        bv.disabled = false; bv.textContent = 'Pasar al proceso';
+      } catch (e) {
+        toast((e.data && e.data.error) === 'ya_volcada'
+          ? 'Esta entrevista ya había entrado en un proceso.'
+          : 'No se pudo enviar al proceso');
+        bv.disabled = false; bv.textContent = 'Enviar al proceso';
       }
     };
   });
+}
+
+/* El proceso se nombra por su código: es como lo tienen en la lista de
+   levantamiento y como se lo dicen entre ellas. El nombre solo no basta
+   porque hay varios parecidos («Agendamiento», «Agendamiento control»). */
+function etiquetaProceso(pid) {
+  const p = (S.procesos || []).find(x => x.id === pid);
+  if (!p) return pid || '—';
+  return (p.codigo ? p.codigo + ' · ' : '') + p.nombre;
+}
+
+function procesosQuePuedoTocar() {
+  return (S.procesos || [])
+    .filter(p => puedeEditar() && (esAdmin() || p.responsable === S.yo.id))
+    .slice()
+    .sort((a, b) => String(a.codigo || 'zz').localeCompare(String(b.codigo || 'zz'))
+                 || String(a.nombre).localeCompare(String(b.nombre)));
 }
 
 function mmss(seg) {
@@ -6339,7 +6406,12 @@ function tarjetaMomento(m, info, claudeLaDescarto) {
       <button class="btn sm ${d === 'si' ? 'p' : ''}" data-si="${m.n}">✓ Sirve</button>
       <button class="btn sm ${d === 'no' ? 'danger' : ''}" data-no="${m.n}">✕ No</button>
       ${alts.length ? `<button class="btn sm" data-otras="${m.n}">Otras tomas (${alts.length})</button>` : ''}
+      <label class="btn sm" style="cursor:pointer;margin:0">
+        ⤒ Mi foto
+        <input type="file" accept="image/*" data-subofoto="${m.n}" style="display:none">
+      </label>
     </div>
+    ${m.propia ? '<div class="tiny">Esta la subiste tú.</div>' : ''}
     ${alts.length ? `<div class="rf-alts oculto" data-alts="${m.n}">
       ${alts.map(a => `<button class="rf-alt" data-cambiar="${m.n}" data-media="${a.mediaId}">
         <img src="/media/${a.mediaId}" loading="lazy">
@@ -6360,7 +6432,7 @@ function conectarRevisionFotos(box, gid, g) {
       ? `${si} aprobadas · ${no} descartadas · ${falta} sin revisar`
       : `${si} aprobadas de ${(g.momentos || []).length}`;
     const bv = box.querySelector('#grabVolcar');
-    if (bv) bv.textContent = si ? `Pasar al proceso (${si} fotos)` : 'Pasar al proceso';
+    if (bv) bv.textContent = si ? `Enviar al proceso (${si} fotos)` : 'Enviar al proceso';
   };
 
   const decidir = async (n, decision, mediaId) => {
@@ -6390,6 +6462,38 @@ function conectarRevisionFotos(box, gid, g) {
   box.querySelectorAll('[data-otras]').forEach(b => b.onclick = () => {
     const caja = box.querySelector(`[data-alts="${b.dataset.otras}"]`);
     if (caja) caja.classList.toggle('oculto');
+  });
+
+  // Subir una foto propia: cuando la del video no sirve y la analista ya
+  // tiene el pantallazo bueno en el celular. Entra aprobada, porque si se
+  // tomó el trabajo de buscarla es porque es la que muestra lo que hacía falta.
+  box.querySelectorAll('[data-subofoto]').forEach(inp => inp.onchange = async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    const n = +inp.dataset.subofoto;
+    const cuerpo = new FormData();
+    cuerpo.append('archivo', f);
+    toast('Subiendo la foto…');
+    try {
+      const r = await fetch(`/api/grabaciones/${gid}/momentos/${n}/imagen`,
+                            { method: 'POST', credentials: 'same-origin', body: cuerpo });
+      const d = await r.json();
+      if (!r.ok) throw Object.assign(new Error('no'), { data: d });
+      const i = (g.momentos || []).findIndex(m => m.n === n);
+      if (i >= 0) g.momentos[i] = d.momento;
+      const tarjeta = box.querySelector(`[data-momento="${n}"]`);
+      if (tarjeta) {
+        tarjeta.outerHTML = tarjetaMomento(d.momento, null, false);
+        conectarRevisionFotos(box, gid, g);
+      }
+      contar();
+      toast('Lista. Queda aprobada para el proceso.');
+    } catch (e) {
+      const c = (e.data && e.data.error) || '';
+      toast(c === 'tiene_que_ser_imagen' ? 'Tiene que ser una foto o un pantallazo'
+          : c === 'archivo_muy_grande' ? 'La foto es muy pesada'
+          : 'No se pudo subir la foto');
+    }
   });
 
   box.querySelectorAll('[data-todas]').forEach(b => b.onclick = async () => {
@@ -6500,19 +6604,19 @@ function modalEditarPasos(gid, g, cajaPadre) {
 const SUBIDA = { activa: null };
 
 function modalSubirVideo(procesoId) {
-  const procesos = S.procesos.filter(p =>
-    puedeEditar() && (esAdmin() || p.responsable === S.yo.id));
-
   modal(`<h3>Subir una entrevista</h3>
     <p class="mut" style="margin-top:-6px">
       Desde el celular, la tablet o el computador. Si se corta la conexión,
       sigue sola donde iba.</p>
 
     <label class="f"><span class="lbl">¿De qué proceso es?</span>
+      <span class="hint">Por el código, como está en la lista de levantamiento.
+        Queda relacionada desde ya; entra en el proceso cuando la revises y la
+        envíes, no ahora.</span>
       <select id="svProceso">
         <option value="">Todavía no sé / lo decido después</option>
-        ${procesos.map(p => `<option value="${p.id}" ${p.id === procesoId ? 'selected' : ''}>
-          ${esc(p.nombre)}</option>`).join('')}
+        ${procesosQuePuedoTocar().map(p => `<option value="${p.id}" ${
+          p.id === procesoId ? 'selected' : ''}>${esc(etiquetaProceso(p.id))}</option>`).join('')}
       </select></label>
 
     <label class="f"><span class="lbl">El video de la entrevista</span>

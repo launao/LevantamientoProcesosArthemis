@@ -67,6 +67,8 @@ def leer(gid):
         # Para poder retomar una subida que se cortó: cuánto pesa el video
         # y cuánto llegó. Sin esto no hay forma de seguir desde donde iba.
         "esperados": f["esperados"] or 0, "recibidos": f["recibidos"] or 0,
+        # Relacionada con un proceso ≠ ya entró en el proceso.
+        "volcada": bool(f["volcada_en"]), "volcadaEn": str(f["volcada_en"] or ""),
         "creado": str(f["creado"]), "actualizado": str(f["actualizado"] or ""),
     }
 
@@ -315,6 +317,51 @@ def guardar_pasos(gid, pasos):
     return {"ok": True, "pasos": len(limpios)}
 
 
+def relacionar(gid, proceso_id):
+    """Deja anotado a qué proceso pertenece la entrevista, sin volcarla.
+
+    Es el «guardar sin enviar»: una revisión de dos horas de grabación no
+    se termina de una sentada, y hasta ahora cerrar la ventana dejaba la
+    entrevista sin rastro de a qué proceso iba. Mientras no se haya
+    volcado se puede cambiar de proceso; después no, porque los pasos y
+    las fotos ya están colgados del otro y moverlos los dejaría huérfanos.
+    """
+    g = leer(gid)
+    if not g:
+        return {"error": "no_existe"}
+    if g.get("volcada") and proceso_id and proceso_id != g["procesoId"]:
+        return {"error": "ya_volcada"}
+    D.execute("UPDATE grabaciones SET proceso_id=? WHERE id=?",
+              (proceso_id or None, gid))
+    return {"ok": True, "procesoId": proceso_id or ""}
+
+
+def imagen_propia(gid, n, media_id, segundo=None):
+    """Pone una foto que trajo la analista como la del momento.
+
+    La toma que estaba no se bota: pasa a las alternativas, porque a veces
+    uno sube la suya y después ve que la del video estaba mejor.
+    """
+    g = leer(gid)
+    if not g:
+        return {"error": "no_existe"}
+    momentos = g.get("momentos") or []
+    for m in momentos:
+        if m.get("n") != n:
+            continue
+        anterior = {"mediaId": m["mediaId"], "segundo": m.get("segundo", 0),
+                    "nitidez": m.get("nitidez", 0)}
+        m["mediaId"] = media_id
+        m["segundo"] = int(segundo if segundo is not None else m.get("segundo", 0))
+        m["propia"] = True
+        m["decision"] = "si"          # si la trajo ella, es la que sirve
+        m["alternativas"] = [anterior] + (m.get("alternativas") or [])
+        D.execute("UPDATE grabaciones SET momentos=? WHERE id=?",
+                  (D.jdump(momentos), gid))
+        return {"ok": True, "momento": m}
+    return {"error": "no_existe_momento"}
+
+
 def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True):
     """Vuelca lo revisado en el proceso: respuestas, actividades y fotos.
 
@@ -327,6 +374,11 @@ def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True):
     g = leer(gid)
     if not g:
         return {"error": "no_existe"}
+    # Volcar dos veces duplicaría cada paso y cada foto, y nadie se daría
+    # cuenta hasta leer el documento final. Pasa con un doble clic o con
+    # la ventana abierta en dos pestañas.
+    if g.get("volcada"):
+        return {"error": "ya_volcada", "procesoId": g["procesoId"]}
     a = g.get("analisis") or {}
     pasos = a.get("pasos") or []
     if not pasos:
@@ -412,6 +464,7 @@ def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True):
              usuario_id, "video"))
         puestas += 1
 
-    D.execute("UPDATE grabaciones SET proceso_id=? WHERE id=?", (proceso_id, gid))
+    D.execute("UPDATE grabaciones SET proceso_id=?, volcada_en=?, volcada_por=? "
+              "WHERE id=?", (proceso_id, _ahora(), usuario_id, gid))
     return {"ok": True, "pasos": len(pasos), "fotos": puestas,
             "campos": llenados, "revisadas": hubo_revision}

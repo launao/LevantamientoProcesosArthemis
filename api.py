@@ -1603,6 +1603,66 @@ def guardar_pasos_api(gid):
     return jsonify(r)
 
 
+@api.post("/grabaciones/<gid>/proceso")
+@puede_editar
+def relacionar_grabacion(gid):
+    """Guardar sin enviar: deja anotado a qué proceso va."""
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+
+    pid = (request.get_json(silent=True) or {}).get("proceso") or ""
+    pid = pid.strip()
+    if pid:
+        p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+        if not p:
+            return jsonify({"error": "proceso_no_existe"}), 404
+        if not _mio(p, u):
+            return jsonify({"error": "no_es_tuyo"}), 403
+
+    r = E.relacionar(gid, pid)
+    if r.get("error"):
+        return jsonify(r), 422
+    auditar("grabacion_relacionada", "grabacion", gid, pid or "sin proceso")
+    return jsonify({**r, "grabacion": E.leer(gid)})
+
+
+@api.post("/grabaciones/<gid>/momentos/<int:n>/imagen")
+@puede_editar
+def imagen_de_momento(gid, n):
+    """Sube una foto propia para un momento, en vez de la del video."""
+    g = E.leer(gid)
+    if not g:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if u["rol"] != "admin" and g["subidoPor"] != u["id"]:
+        return jsonify({"error": "sin_permiso"}), 403
+
+    f = request.files.get("archivo")
+    if not f:
+        return jsonify({"error": "sin_archivo"}), 400
+    datos = f.read()
+    if not datos:
+        return jsonify({"error": "archivo_vacio"}), 400
+    if len(datos) > MAX_MEDIA:
+        return jsonify({"error": "archivo_muy_grande",
+                        "max_mb": MAX_MEDIA // (1024 * 1024)}), 413
+    ctype = (f.mimetype or "").split(";")[0].strip()
+    if not ctype.startswith("image/"):
+        return jsonify({"error": "tiene_que_ser_imagen",
+                        "detalle": "Sube una foto o un pantallazo."}), 415
+
+    mid = _guardar_media_bytes(None, datos, ctype, f.filename or "foto")
+    r = E.imagen_propia(gid, n, mid)
+    if r.get("error"):
+        return jsonify(r), 404
+    auditar("momento_con_foto_propia", "grabacion", gid, f"momento {n}")
+    return jsonify(r)
+
+
 @api.post("/grabaciones/<gid>/a-proceso")
 @puede_editar
 def volcar_grabacion(gid):
@@ -1620,6 +1680,10 @@ def volcar_grabacion(gid):
                     llenar_campos=(request.get_json(silent=True) or {})
                     .get("llenarCampos", True))
     if r.get("error"):
+        if r["error"] == "ya_volcada":
+            return jsonify({**r, "detalle": "Esta entrevista ya entró en un "
+                                            "proceso. Volcarla otra vez "
+                                            "duplicaría los pasos."}), 409
         return jsonify(r), 422
     auditar("grabacion_volcada", "proceso", pid, f"{r['pasos']} pasos, {r['fotos']} fotos")
     return jsonify(r)

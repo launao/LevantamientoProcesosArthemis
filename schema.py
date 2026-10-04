@@ -254,6 +254,13 @@ COLUMNAS_NUEVAS = [
     ("grabaciones", "ruta_video", "TEXT"),
     ("grabaciones", "recibidos", "INTEGER DEFAULT 0"),
     ("grabaciones", "esperados", "INTEGER DEFAULT 0"),
+    # Estar relacionada con un proceso y haber entrado en él son dos cosas
+    # distintas: lo primero se escoge al subir el video, lo segundo pasa
+    # cuando alguien ya revisó y aprieta «Pasar al proceso». Mezclarlas
+    # hacía que escoger el proceso al subir dejara la entrevista marcada
+    # como ya volcada, sin forma de volcarla nunca.
+    ("grabaciones", "volcada_en", "TEXT"),
+    ("grabaciones", "volcada_por", "TEXT"),
 ]
 
 
