@@ -1781,6 +1781,65 @@ function conectarCampos(cont) {
    llevar a su actividad: justo el movimiento que más hace falta cuando la
    app sacó las fotos del video. Ahora las actividades y sus pasitos
    aparecen primero, que es a donde casi siempre va. */
+/* Arrastrar una foto hasta su actividad.
+
+   Con doce actividades, escoger en un desplegable doce veces es un
+   suplicio: arrastrar es lo que uno haría con las fotos sobre una mesa.
+   El desplegable se queda igual, porque arrastrar no existe en una
+   tablet ni con el teclado, y ahí tiene que haber otra forma. */
+function conectarArrastreFotos(box) {
+  box.querySelectorAll('[data-arrastra]').forEach(el => {
+    el.ondragstart = ev => {
+      ev.dataTransfer.setData('text/plain', el.dataset.arrastra);
+      ev.dataTransfer.effectAllowed = 'move';
+      el.classList.add('arrastrando');
+      document.body.classList.add('moviendo-foto');
+    };
+    el.ondragend = () => {
+      el.classList.remove('arrastrando');
+      document.body.classList.remove('moviendo-foto');
+    };
+  });
+  prepararDestinosArrastre();
+}
+
+let _destinosListos = false;
+
+function prepararDestinosArrastre() {
+  // Se vuelve a conectar en cada repintado de la evidencia, pero las
+  // filas de actividades pueden ser las mismas: marcarlas evita colgarles
+  // dos veces el mismo manejador.
+  const campoPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c;
+  if (!campoPasos) return;
+
+  document.querySelectorAll(`[data-pasos="${campoPasos.id}"] .actividad`)
+    .forEach(fila => {
+      const i = fila.dataset.i;
+      colgarDestino(fila, `${campoPasos.id}:${i}`);
+      fila.querySelectorAll('.sub').forEach(sub =>
+        colgarDestino(sub, `${campoPasos.id}:${i}:${sub.dataset.j}`));
+    });
+  _destinosListos = true;
+}
+
+function colgarDestino(el, ref) {
+  el.dataset.destino = ref;
+  el.ondragover = ev => {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'move';
+    el.classList.add('recibe');
+  };
+  el.ondragleave = () => el.classList.remove('recibe');
+  el.ondrop = async ev => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    el.classList.remove('recibe');
+    const id = ev.dataTransfer.getData('text/plain');
+    if (!id) return;
+    await moverEvidencia(id, el.dataset.destino);
+  };
+}
+
 function destinosParaMover(actual) {
   const pasos = ((S.draft && S.draft.respuestas && S.draft.respuestas.f_pasos) || []);
   const campoPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c;
@@ -1870,7 +1929,8 @@ function pintarEvidencias(p) {
           <div class="pie"><span class="tiny">Nota escrita ${cel}</span>${acciones}</div></div>`;
 
       if (e.tipo === 'foto')
-        return `<div class="ev-item">
+        return `<div class="ev-item" draggable="true" data-arrastra="${e.id}"
+                     title="Arrástrala a su actividad">
           <img class="thumb" src="${url}" alt="evidencia" data-big="${url}">
           <div class="pie">${cel ? '<span class="tiny">📱</span>' : ''}${acciones}</div></div>`;
 
@@ -1885,6 +1945,8 @@ function pintarEvidencias(p) {
     box.querySelectorAll('[data-mover]').forEach(sel => sel.onchange = () => {
       if (sel.value) moverEvidencia(sel.dataset.mover, sel.value);
     });
+
+    conectarArrastreFotos(box);
 
     const rep = box.querySelector('#repartirFotos');
     if (rep) rep.onclick = async () => {
@@ -1906,6 +1968,30 @@ function pintarEvidencias(p) {
 }
 
 /** Reubica una foto o audio que quedó en la pregunta equivocada. */
+/* Cómo se llama el sitio a donde fue la foto.
+
+   Antes decía «otra pregunta» para cualquier actividad, porque buscaba
+   «f_pasos:3» en la lista de campos de la plantilla y no estaba. Quien
+   acaba de mover una foto necesita confirmar que cayó donde quería. */
+function nombreDeDestino(ref) {
+  const partes = String(ref || '').split(':');
+  const campo = (camposFlat().find(x => x.c.id === partes[0]) || {}).c;
+  if (partes.length === 1) return campo ? campo.etiqueta : 'otra pregunta';
+
+  const pasos = ((S.draft && S.draft.respuestas
+                  && S.draft.respuestas[partes[0]]) || []);
+  const i = Number(partes[1]);
+  const act = pasos[i];
+  if (!act) return campo ? campo.etiqueta : 'otra pregunta';
+  if (partes.length === 2)
+    return `actividad ${i + 1} · ${recortar(act.actividad || 'sin nombre', 40)}`;
+
+  const subs = (Array.isArray(act.subtareas) ? act.subtareas : []).map(normalizarSub);
+  const j = Number(partes[2]);
+  return `${i + 1}.${j + 1} · ${recortar(
+    (subs[j] && subs[j].texto) || 'sin nombre', 40)}`;
+}
+
 async function moverEvidencia(eid, campoDestino) {
   const p = S.draft;
   try {
@@ -1914,8 +2000,7 @@ async function moverEvidencia(eid, campoDestino) {
     if (ev) ev.campo = campoDestino;
     sincronizarEvidencias(p);
     pintarEvidencias(p);
-    const destino = camposFlat().find(x => x.c.id === campoDestino);
-    toast('Movido a: ' + (destino ? destino.c.etiqueta : 'otra pregunta'));
+    toast('Movido a: ' + nombreDeDestino(campoDestino));
   } catch (_) { toast('No se pudo mover'); }
 }
 

@@ -988,6 +988,15 @@ a{text-decoration-thickness:2px;text-underline-offset:3px}
 /* El video a medio subir se marca aparte: no está listo ni roto, está
    esperando que alguien lo termine. */
 .grab-card.subiendo{border-left:5px solid var(--warn,#d98324);background:var(--surface-2)}
+/* Arrastrar una foto a su actividad. Mientras se arrastra, las filas que
+   pueden recibirla se marcan: sin eso uno no sabe dónde soltar. */
+.ev-item[draggable="true"]{cursor:grab}
+.ev-item.arrastrando{opacity:.45;cursor:grabbing}
+body.moviendo-foto .actividad{outline:2px dashed color-mix(in srgb,var(--accent) 45%,transparent);
+  outline-offset:2px}
+.actividad.recibe,.sub.recibe{outline:3px solid var(--accent);outline-offset:2px;
+  background:color-mix(in srgb,var(--accent) 12%,transparent)}
+
 /* El código para subir desde el celular. Grande: se lee desde lejos y con
    la mano temblorosa. */
 .qr-caja{display:flex;justify-content:center;margin:16px 0 4px}
