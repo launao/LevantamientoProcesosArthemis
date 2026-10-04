@@ -1727,6 +1727,78 @@ def subir_cancelar(gid):
     return jsonify({"ok": True})
 
 
+@api.post("/procesos/<pid>/repartir-fotos")
+@puede_editar
+def repartir_fotos(pid):
+    """Lleva a su actividad las fotos que quedaron en el cajón general.
+
+    Sirve para arreglar lo que ya está: las entrevistas volcadas antes de
+    que la app supiera deducir el paso por el minuto dejaron sus fotos
+    sueltas. El minuto sigue guardado en la entrevista, así que se puede
+    recuperar sin volver a subir nada.
+    """
+    p = D.row("SELECT id, responsable_id, respuestas FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if not _mio(p, u):
+        return jsonify({"error": "no_es_tuyo"}), 403
+
+    pasos = D.jload(p["respuestas"], {}).get("f_pasos") or []
+    if not pasos:
+        return jsonify({"ok": True, "movidas": 0, "detalle": "El proceso no tiene actividades."})
+
+    # El minuto de cada foto: está en los momentos de las entrevistas de
+    # este proceso, indexado por la imagen que se guardó.
+    minuto_de = {}
+    for f in D.rows("SELECT id FROM grabaciones WHERE proceso_id=?", (pid,)):
+        for m in (E.leer(f["id"]) or {}).get("momentos") or []:
+            if m.get("mediaId"):
+                minuto_de[m["mediaId"]] = m.get("segundo")
+
+    movidas, sin_minuto = 0, 0
+    for e in D.rows("SELECT id, media_id FROM evidencias WHERE proceso_id=? "
+                    "AND campo_id='f_pasos' AND tipo='foto'", (pid,)):
+        seg = minuto_de.get(e["media_id"])
+        if seg is None:
+            sin_minuto += 1
+            continue
+        n = E._paso_del_minuto(pasos, seg)
+        if not n:
+            sin_minuto += 1
+            continue
+        D.execute("UPDATE evidencias SET campo_id=? WHERE id=?",
+                  (f"f_pasos:{n - 1}", e["id"]))
+        movidas += 1
+
+    if movidas:
+        auditar("fotos_repartidas", "proceso", pid, f"{movidas} fotos")
+    return jsonify({"ok": True, "movidas": movidas, "sinMinuto": sin_minuto})
+
+
+@api.get("/procesos/<pid>/entrevistas")
+@login_required
+def entrevistas_del_proceso(pid):
+    """Las entrevistas que alimentan este proceso, en orden de visita.
+
+    Un proceso se levanta en varias visitas: hace falta poder ver cuáles
+    ya entraron, cuáles están a medio revisar, y qué actividades trajo
+    cada una.
+    """
+    filas = D.rows("SELECT id FROM grabaciones WHERE proceso_id=? ORDER BY creado",
+                   (pid,))
+    gs = []
+    for f in filas:
+        g = E.leer(f["id"])
+        g["transcripcion"] = []
+        g["momentos"] = []
+        gs.append({k: g[k] for k in ("id", "nombre", "estado", "duracion", "volcada",
+                                     "volcadaEn", "creado", "subidoPor")}
+                  | {"titulo": (g.get("analisis") or {}).get("titulo", ""),
+                     "pasos": len(((g.get("analisis") or {}).get("pasos") or []))})
+    return jsonify({"entrevistas": gs})
+
+
 @api.get("/grabaciones")
 @login_required
 def listar_grabaciones():
@@ -1856,9 +1928,9 @@ def volcar_grabacion(gid):
         return jsonify({"error": "no_es_tuyo"}), 403
 
     _guardar_version(pid, u["id"], "antes de volcar la entrevista grabada")
-    r = E.a_proceso(gid, pid, u["id"],
-                    llenar_campos=(request.get_json(silent=True) or {})
-                    .get("llenarCampos", True))
+    pos = d.get("posicion")
+    r = E.a_proceso(gid, pid, u["id"], llenar_campos=d.get("llenarCampos", True),
+                    posicion=(None if pos in (None, "", "final") else pos))
     if r.get("error"):
         if r["error"] == "ya_volcada":
             return jsonify({**r, "detalle": "Esta entrevista ya entró en un "

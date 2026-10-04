@@ -1774,6 +1774,49 @@ function conectarCampos(cont) {
 }
 
 /* ── Evidencias ───────────────────────────────────────────────── */
+/* A dónde se puede mover una foto.
+
+   Antes solo ofrecía las preguntas generales del levantamiento, así que
+   una foto que cayó en el cajón general del paso a paso no se podía
+   llevar a su actividad: justo el movimiento que más hace falta cuando la
+   app sacó las fotos del video. Ahora las actividades y sus pasitos
+   aparecen primero, que es a donde casi siempre va. */
+function destinosParaMover(actual) {
+  const pasos = ((S.draft && S.draft.respuestas && S.draft.respuestas.f_pasos) || []);
+  const campoPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c;
+  let html = '';
+
+  if (campoPasos && pasos.length) {
+    html += `<optgroup label="Las actividades del paso a paso">`;
+    pasos.forEach((a, i) => {
+      const ref = `${campoPasos.id}:${i}`;
+      if (ref !== actual) {
+        html += `<option value="${ref}">${i + 1}. ${
+          esc(recortar(a.actividad || 'sin nombre', 55))}</option>`;
+      }
+      (Array.isArray(a.subtareas) ? a.subtareas : []).map(normalizarSub)
+        .forEach((t, j) => {
+          const sref = `${campoPasos.id}:${i}:${j}`;
+          if (sref !== actual) {
+            html += `<option value="${sref}">&nbsp;&nbsp;${i + 1}.${j + 1} ${
+              esc(recortar(t.texto || 'sin nombre', 50))}</option>`;
+          }
+        });
+    });
+    html += `</optgroup>`;
+  }
+
+  html += `<optgroup label="Las demás preguntas del levantamiento">`;
+  camposFlat().forEach(x => {
+    if (x.c.id !== actual) {
+      html += `<option value="${x.c.id}">${esc(x.c.etiqueta)}</option>`;
+    }
+  });
+  html += `</optgroup>`;
+  return html;
+}
+
+
 function pintarEvidencias(p) {
   if (!p) return;
   const evs = p.evidencias || [];
@@ -1795,14 +1838,29 @@ function pintarEvidencias(p) {
   document.querySelectorAll('[data-ev]').forEach(box => {
     const cid = box.dataset.ev;
     const mias = evs.filter(e => e.campo === cid);
-    box.innerHTML = mias.map(e => {
+
+    // El cajón general del paso a paso: si tiene fotos del video, se
+    // ofrece repartirlas por el minuto en que se tomaron, en vez de
+    // obligar a moverlas una por una.
+    const esCajonPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c
+      && cid === (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c.id;
+    const delVideo = mias.filter(e => e.tipo === 'foto' && e.origen === 'video');
+    const cabecera = (esCajonPasos && delVideo.length && puedeEditar())
+      ? `<div class="aviso-ia" style="margin-bottom:10px">
+           Hay <b>${delVideo.length} foto(s)</b> aquí sueltas, sin actividad.
+           <button class="btn sm" id="repartirFotos" style="margin-top:8px">
+             Llevarlas a su actividad</button>
+           <div class="tiny" style="margin-top:6px">Cada una se va a la actividad
+             que se estaba explicando en ese minuto del video. Las que no se
+             puedan ubicar se quedan aquí y las mueves a mano.</div>
+         </div>` : '';
+    box.innerHTML = cabecera + mias.map(e => {
       const url = '/media/' + e.mediaId;
       const cel = e.origen === 'celular' ? '📱' : '';
       const acciones = puedeEditar() ? `
-        <select class="mover" data-mover="${e.id}" title="Mover a otra pregunta">
+        <select class="mover" data-mover="${e.id}" title="Mover a otro sitio">
           <option value="">Mover a…</option>
-          ${campos.filter(x => x.c.id !== cid).map(x =>
-            `<option value="${x.c.id}">${esc(x.c.etiqueta)}</option>`).join('')}
+          ${destinosParaMover(cid)}
         </select>
         <button class="x" data-del="${e.id}" title="Eliminar">×</button>` : '';
 
@@ -1827,6 +1885,23 @@ function pintarEvidencias(p) {
     box.querySelectorAll('[data-mover]').forEach(sel => sel.onchange = () => {
       if (sel.value) moverEvidencia(sel.dataset.mover, sel.value);
     });
+
+    const rep = box.querySelector('#repartirFotos');
+    if (rep) rep.onclick = async () => {
+      rep.disabled = true; rep.textContent = 'Repartiendo…';
+      try {
+        const r = await api('/procesos/' + S.procId + '/repartir-fotos',
+                            { method: 'POST' });
+        toast(r.movidas
+          ? `${r.movidas} foto(s) llevadas a su actividad`
+            + (r.sinMinuto ? ` · ${r.sinMinuto} se quedaron aquí` : '')
+          : 'Ninguna se pudo ubicar sola. Muévelas con «Mover a…».');
+        await abrirProceso(S.procId);
+      } catch (_) {
+        toast('No se pudo repartir');
+        rep.disabled = false; rep.textContent = 'Llevarlas a su actividad';
+      }
+    };
   });
 }
 
@@ -6318,6 +6393,7 @@ async function abrirGrabacion(gid) {
              ${procesosQuePuedoTocar().map(p => `<option value="${p.id}"
                ${p.id === g.procesoId ? 'selected' : ''}>${esc(etiquetaProceso(p.id))}</option>`).join('')}
            </select>
+           <div id="grabDonde" class="oculto" style="flex:1 1 100%"></div>
            <button class="btn" id="grabGuardar">Guardar sin enviar</button>
            <button class="btn p" id="grabVolcar">Enviar al proceso</button>`}
       <button class="btn right" data-cerrar>Cerrar</button>
@@ -6340,6 +6416,56 @@ async function abrirGrabacion(gid) {
 
     const vp = box.querySelector('[data-verproc]');
     if (vp) vp.onclick = () => { cerrarModal(); abrirProceso(vp.dataset.verproc); };
+
+    /* Dónde entran los pasos de esta entrevista.
+
+       Un proceso se levanta en varias visitas, y el orden del proceso no
+       es el orden en que se grabó: la del martes puede ser el principio
+       de lo que se contó el lunes. Solo se pregunta cuando el proceso ya
+       tiene actividades; si está vacío no hay nada que decidir. */
+    const sel = box.querySelector('#grabProceso');
+    const donde = box.querySelector('#grabDonde');
+    const pintarDonde = async () => {
+      if (!sel || !donde) return;
+      const pid = sel.value;
+      donde.classList.add('oculto');
+      donde.innerHTML = '';
+      if (!pid) return;
+
+      let p = S.procesos.find(x => x.id === pid);
+      let acts = ((p && p.respuestas && p.respuestas.f_pasos) || []);
+      if (!acts.length) {
+        try { acts = ((await api('/procesos/' + pid)).proceso.respuestas.f_pasos) || []; }
+        catch (_) { acts = []; }
+      }
+      if (!acts.length) return;          // proceso vacío: va y punto
+
+      let previas = [];
+      try { previas = (await api('/procesos/' + pid + '/entrevistas')).entrevistas || []; }
+      catch (_) {}
+      const yaEntraron = previas.filter(x => x.volcada && x.id !== gid);
+
+      donde.classList.remove('oculto');
+      donde.innerHTML = `
+        <div class="aviso-ia">
+          Este proceso ya tiene <b>${acts.length} actividad(es)</b>${
+            yaEntraron.length ? `, de ${yaEntraron.length} entrevista(s) anterior(es)` : ''}.
+          ${yaEntraron.length ? `<div class="tiny" style="margin-top:6px">${
+            yaEntraron.map(x => esc(x.titulo || x.nombre) + ' · '
+              + esc(fechaLarga(x.creado))).join('<br>')}</div>` : ''}
+        </div>
+        <label class="f" style="margin-top:10px">
+          <span class="lbl">¿Dónde van los pasos de esta entrevista?</span>
+          <span class="hint">El orden del proceso no es el orden en que se grabó.
+            Si esta visita cubre el principio, ponla antes.</span>
+          <select id="grabPos">
+            <option value="final">Al final, después de todo lo que ya hay</option>
+            <option value="0">Al principio, antes de la actividad 1</option>
+            ${acts.map((a, i) => `<option value="${i + 1}">Después de la ${i + 1}: ${
+              esc(recortar(a.actividad || 'sin nombre', 60))}</option>`).join('')}
+          </select></label>`;
+    };
+    if (sel) { sel.onchange = pintarDonde; pintarDonde(); }
 
     const bg = box.querySelector('#grabGuardar');
     if (bg) bg.onclick = async () => {

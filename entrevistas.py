@@ -436,14 +436,50 @@ def imagen_propia(gid, n, media_id, segundo=None):
     return {"error": "no_existe_momento"}
 
 
-def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True):
+def _correr_evidencias(proceso_id, desde, cuantos):
+    """Corre las fotos de las actividades que se desplazaron.
+
+    Una foto vive pegada a su actividad por el número: «f_pasos:4». Si se
+    insertan tres actividades antes, la que era la 4 pasa a ser la 7, y si
+    no se corre la referencia la foto queda colgada de otra actividad
+    —o de ninguna—. Se corre de atrás hacia adelante para no pisar
+    números que todavía faltan por mover.
+    """
+    if cuantos <= 0:
+        return 0
+    filas = D.rows("SELECT id, campo_id FROM evidencias WHERE proceso_id=? "
+                   "AND campo_id LIKE 'f_pasos:%'", (proceso_id,))
+    movidas = []
+    for f in filas:
+        partes = (f["campo_id"] or "").split(":")
+        try:
+            k = int(partes[1])
+        except (IndexError, ValueError):
+            continue
+        if k < desde:
+            continue
+        resto = (":" + ":".join(partes[2:])) if len(partes) > 2 else ""
+        movidas.append((f["id"], f"f_pasos:{k + cuantos}{resto}", k))
+
+    for eid, nuevo, _ in sorted(movidas, key=lambda x: -x[2]):
+        D.execute("UPDATE evidencias SET campo_id=? WHERE id=?", (nuevo, eid))
+    return len(movidas)
+
+
+def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True, posicion=None):
     """Vuelca lo revisado en el proceso: respuestas, actividades y fotos.
 
     Tres reglas que no cambian:
       · No pisa nada escrito. Lo que ya tenía texto se queda como estaba.
-      · Las actividades se agregan al final, no reemplazan a las que había.
+      · Las actividades se agregan, no reemplazan a las que había.
       · Solo entran las fotos que alguien aprobó. Una foto que nadie miró
         no es evidencia de nada.
+
+    'posicion' es dónde entran las actividades nuevas: None o un número
+    mayor que las que hay significa al final; 0, al principio; N, después
+    de la actividad N. Hace falta porque un proceso puede levantarse en
+    varias visitas y la del martes puede ser el principio de lo que se
+    grabó el lunes: el orden del proceso no es el orden en que se grabó.
     """
     g = leer(gid)
     if not g:
@@ -464,17 +500,35 @@ def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True):
 
     respuestas = D.jload(p["respuestas"], {})
     actuales = respuestas.get("f_pasos") or []
-    desde = len(actuales)
 
+    # Dónde empiezan las nuevas.
+    if posicion is None:
+        desde = len(actuales)
+    else:
+        try:
+            desde = max(0, min(int(posicion), len(actuales)))
+        except (TypeError, ValueError):
+            desde = len(actuales)
+
+    nuevas = []
     for paso in pasos:
-        actuales.append({
+        nuevas.append({
             "actividad": (paso.get("actividad") or "")[:300],
             "responsable": (a.get("quien_habla") or "")[:120],
             "sistema": (paso.get("sistema") or "")[:120],
             "tiempo": (paso.get("tiempo") or "")[:60],
             "detalle": (paso.get("detalle") or "")[:4000],
             "subtareas": [],
+            # De qué entrevista salió. Con varias visitas al mismo proceso,
+            # es lo que permite saber después de dónde vino cada actividad.
+            "deGrabacion": gid,
         })
+
+    # Las fotos de las actividades que se corren tienen que correrse con
+    # ellas, y antes de meter las nuevas: si no, dos actividades
+    # distintas acabarían reclamando el mismo número.
+    corridas = _correr_evidencias(proceso_id, desde, len(nuevas)) if desde < len(actuales) else 0
+    actuales[desde:desde] = nuevas
     respuestas["f_pasos"] = actuales
 
     # Las respuestas del formulario, solo donde no hay nada escrito.
@@ -548,4 +602,5 @@ def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True):
     D.execute("UPDATE grabaciones SET proceso_id=?, volcada_en=?, volcada_por=? "
               "WHERE id=?", (proceso_id, _ahora(), usuario_id, gid))
     return {"ok": True, "pasos": len(pasos), "fotos": puestas,
-            "campos": llenados, "revisadas": hubo_revision}
+            "campos": llenados, "revisadas": hubo_revision,
+            "desde": desde, "corridas": corridas}
