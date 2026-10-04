@@ -6012,7 +6012,7 @@ function tarjetaGrabacion(g) {
     ${g.estado === 'error'
       ? `<div class="aviso-ia error" style="margin-top:10px">${esc(traducirErrorGrab(g.error))}</div>`
       : trabajando
-        ? `<div class="tiny" style="margin-top:8px">${esc(e.ayuda)}</div>`
+        ? avanceGrabacion(g, e)
         : `<div class="grab-datos">
             <div><b>${(a.pasos || []).length || g.pasos || 0}</b><span class="tiny">pasos</span></div>
             <div><b>${(g.momentos || []).length}</b><span class="tiny">fotos</span></div>
@@ -6030,6 +6030,40 @@ function tarjetaGrabacion(g) {
   </div>`;
 }
 
+/* Cuánto va del paso en curso.
+
+   Sin esto, «sacando fotos» se veía igual a los dos minutos que a la
+   media hora: no había forma de saber si seguía trabajando o si el
+   servidor se había reiniciado dejándola colgada. Cuando el paso se
+   puede contar —las fotos son N momentos— se muestra la cuenta de
+   verdad; cuando no, se muestran los minutos que lleva. */
+const MINUTOS_SOSPECHA = 25;
+
+function avanceGrabacion(g, e) {
+  const desde = g.pasoDesde || g.actualizado || g.creado;
+  const min = desde ? Math.floor((Date.now() - new Date(
+    /Z|[+-]\d\d:?\d\d$/.test(desde) ? desde : desde.replace(' ', 'T') + 'Z'
+  ).getTime()) / 60000) : 0;
+  const colgada = min >= MINUTOS_SOSPECHA;
+
+  const pc = g.total ? Math.min(100, Math.round(g.progreso / g.total * 100)) : 0;
+  return `<div style="margin-top:10px">
+    ${g.total ? `<div class="sv-barra"><i style="width:${pc}%"></i></div>
+      <div class="tiny" style="margin-top:7px">
+        Foto ${g.progreso} de ${g.total} · ${pc}%</div>`
+      : `<div class="tiny">${esc(e.ayuda)}</div>`}
+    <div class="tiny" style="margin-top:5px">
+      ${min >= 1 ? `Lleva ${min} min en este paso.` : 'Acaba de empezar.'}
+      ${!g.total ? ' No se puede contar en pasos, así que no hay porcentaje.' : ''}
+    </div>
+    ${colgada ? `<div class="aviso-ia error" style="margin-top:9px">
+      <b>Parece detenida.</b> Lleva ${min} minutos sin avanzar, que es más de lo
+      que debería. Si el servidor se reinició, el trabajo se perdió: descarta
+      esta entrevista y vuelve a subir el video. Nada de lo demás se afecta.
+    </div>` : ''}
+  </div>`;
+}
+
 function traducirErrorGrab(e) {
   const c = String(e || '').split(':')[0];
   return {
@@ -6039,7 +6073,10 @@ function traducirErrorGrab(e) {
     audio_muy_grande: 'La grabación es muy larga para el servicio. Pártela en dos.',
     limite_alcanzado: 'El servicio de voz está saturado. Vuelve a intentar en un rato.',
     sin_conexion: 'El servidor no pudo comunicarse con el servicio de voz.',
-    respuesta_ilegible: 'El análisis se cortó. Vuelve a subirla.'
+    respuesta_ilegible: 'El análisis se cortó. Vuelve a subirla.',
+    no_se_pudo_extraer: 'No se pudo sacar la voz del video. Puede que el archivo '
+      + 'llegara incompleto: vuelve a subirlo.',
+    video_ilegible: 'El video llegó incompleto. Vuelve a subirlo.'
   }[c] || ('No se pudo procesar: ' + e);
 }
 

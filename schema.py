@@ -268,6 +268,12 @@ COLUMNAS_NUEVAS = [
     # como ya volcada, sin forma de volcarla nunca.
     ("grabaciones", "volcada_en", "TEXT"),
     ("grabaciones", "volcada_por", "TEXT"),
+    # Avance del trabajo largo. Sin esto, «sacando fotos» se veía igual a
+    # los dos minutos que a la media hora, y no había forma de saber si
+    # seguía trabajando o si el servidor se había reiniciado a medias.
+    ("grabaciones", "progreso", "INTEGER DEFAULT 0"),
+    ("grabaciones", "total", "INTEGER DEFAULT 0"),
+    ("grabaciones", "paso_desde", "TEXT"),
 ]
 
 

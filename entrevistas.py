@@ -69,6 +69,10 @@ def leer(gid):
         "esperados": f["esperados"] or 0, "recibidos": f["recibidos"] or 0,
         # Relacionada con un proceso ≠ ya entró en el proceso.
         "volcada": bool(f["volcada_en"]), "volcadaEn": str(f["volcada_en"] or ""),
+        # Avance del paso en curso, para que la pantalla pueda decir si
+        # esto sigue trabajando o se quedó colgado.
+        "progreso": f["progreso"] or 0, "total": f["total"] or 0,
+        "pasoDesde": str(f["paso_desde"] or ""),
         "creado": str(f["creado"]), "actualizado": str(f["actualizado"] or ""),
     }
 
@@ -92,13 +96,27 @@ def listar(solo_de=None):
 
 
 def _marcar(gid, estado, **campos):
-    sets = ["estado=?", f"actualizado={D.NOW}"]
-    vals = [estado]
+    # Cada paso arranca su propio reloj y su propio contador: así la
+    # pantalla puede decir «van 4 min en este paso» en vez de sumar el
+    # rato que la grabación lleva existiendo.
+    sets = ["estado=?", f"actualizado={D.NOW}", "paso_desde=?",
+            "progreso=0", "total=0"]
+    vals = [estado, _ahora()]
     for k, v in campos.items():
         sets.append(f"{k}=?")
         vals.append(v)
     vals.append(gid)
     D.execute(f"UPDATE grabaciones SET {', '.join(sets)} WHERE id=?", tuple(vals))
+
+
+def _avance(gid, hechos, total):
+    """Cuánto va de un paso que se puede contar.
+
+    Se escribe también 'actualizado' porque es lo que mira la pantalla
+    para decidir si el trabajo sigue vivo o se quedó colgado.
+    """
+    D.execute(f"UPDATE grabaciones SET progreso=?, total=?, actualizado={D.NOW} "
+              "WHERE id=?", (int(hechos), int(total), gid))
 
 
 def procesar(gid, ruta_audio, ruta_video=None, contexto=""):
@@ -193,6 +211,10 @@ def _sacar_momentos(gid, ruta_video, momentos):
     salida = []
     with tempfile.TemporaryDirectory() as tmp:
         for i, m in enumerate(momentos, 1):
+            # Se avisa al empezar cada momento, no al acabarlo: un momento
+            # que se salta porque el video no da esa parte igual tiene que
+            # mover el contador, o la barra se quedaría quieta sin motivo.
+            _avance(gid, i, len(momentos))
             try:
                 seg = float(m.get("segundo") or 0)
             except (TypeError, ValueError):
