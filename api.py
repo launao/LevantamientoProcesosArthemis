@@ -2304,6 +2304,60 @@ def subir_evidencia(pid):
     return jsonify(payload), code
 
 
+@api.post("/procesos/<pid>/evidencias/lote")
+@puede_editar
+def subir_evidencias_lote(pid):
+    """Varias fotos de un golpe, para el mismo sitio.
+
+    El navegador las manda por tandas pequeñas: quinientas fotos no caben
+    en una sola petición ni de lejos, y partirlas aquí permite además
+    mostrar cuánto va subido en vez de dejar a alguien mirando una
+    pantalla quieta durante diez minutos.
+    """
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if not _mio(p, u):
+        return jsonify({"error": "no_es_tuyo"}), 403
+
+    archivos = request.files.getlist("fotos")
+    if not archivos:
+        return jsonify({"error": "sin_archivos"}), 400
+
+    campo = (request.form.get("campo") or "").strip()
+    # El orden de llegada se conserva: quien sube quinientas fotos las
+    # tiene ordenadas en una carpeta, y ese orden es información.
+    base = D.row("SELECT COALESCE(MAX(orden),0) m FROM evidencias WHERE proceso_id=?",
+                 (pid,))["m"] or 0
+
+    puestas, rechazadas = [], []
+    for i, a in enumerate(archivos[:40], 1):
+        datos = a.read()
+        if not datos:
+            continue
+        if len(datos) > MAX_MEDIA:
+            rechazadas.append({"nombre": a.filename, "por_que": "muy pesada"})
+            continue
+        ctype = (a.mimetype or "").split(";")[0].strip()
+        if not ctype.startswith("image/"):
+            rechazadas.append({"nombre": a.filename, "por_que": "no es una imagen"})
+            continue
+        mid = _guardar_media_bytes(pid, datos, ctype, a.filename or "foto")
+        eid = _nuevo_id("e_")
+        D.execute(
+            "INSERT INTO evidencias (id, proceso_id, campo_id, tipo, media_id, nota, "
+            "autor_id, origen, orden) VALUES (?,?,?,?,?,?,?,?,?)",
+            (eid, pid, campo, "foto", mid, (a.filename or "")[:200], u["id"],
+             "lote", base + i))
+        puestas.append({"id": eid, "mediaId": mid, "campo": campo,
+                        "nombre": a.filename or ""})
+
+    if puestas:
+        auditar("fotos_en_lote", "proceso", pid, f"{len(puestas)} fotos")
+    return jsonify({"ok": True, "puestas": puestas, "rechazadas": rechazadas})
+
+
 @api.put("/evidencias/<eid>")
 @puede_editar
 def mover_evidencia(eid):

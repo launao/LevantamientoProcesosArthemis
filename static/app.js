@@ -7093,6 +7093,7 @@ function modalSubirVideo(procesoId) {
         cuelga ahí. Escógelas en el orden en que las tomaron.</span>
       <input type="file" id="svFotos" accept="image/*" multiple></label>
 
+    <div id="svAvisoFotos"></div>
     <div id="svInfo"></div>
     <div id="svProgreso" class="oculto">
       <div class="sv-barra"><i id="svBarra" style="width:0%"></i></div>
@@ -7116,9 +7117,47 @@ function modalSubirVideo(procesoId) {
     const info = box.querySelector('#svInfo');
     const empezar = box.querySelector('#svEmpezar');
 
+    const fotosInp = box.querySelector('#svFotos');
+    const proceso = box.querySelector('#svProceso');
+
+    // Se puede subir solo fotos, sin entrevista: una actividad se explica
+    // muchas veces con varias fotos y no siempre hay una grabación detrás.
+    // Para eso hace falta saber a qué proceso van, porque sin entrevista
+    // no hay nada más que las ate.
+    const revisarSiSePuede = () => {
+      const hayMedia = (archivo.files || []).length > 0;
+      const hayFotos = (fotosInp && fotosInp.files || []).length > 0;
+      empezar.disabled = !(hayMedia || (hayFotos && proceso.value));
+      empezar.textContent = (!hayMedia && hayFotos) ? 'Subir las fotos' : 'Subir';
+    };
+    proceso.onchange = () => { revisarSiSePuede(); pintarDondeFotos(); };
+
+    const pintarDondeFotos = () => {
+      const fs = Array.from((fotosInp && fotosInp.files) || []);
+      const aviso = box.querySelector('#svAvisoFotos');
+      if (!aviso) return;
+      if (!fs.length) { aviso.innerHTML = ''; return; }
+      const mb = fs.reduce((a, f) => a + f.size, 0) / 1048576;
+      const hayMedia = (archivo.files || []).length > 0;
+      aviso.innerHTML = `<div class="aviso-ia">
+        <b>${fs.length} foto(s)</b> · ${Math.round(mb)} MB.
+        ${hayMedia
+          ? 'Se guardan con la entrevista y la app las ubica en su paso al analizarla.'
+          : (proceso.value
+            ? `Sin entrevista, entran directo al proceso
+               ${esc(etiquetaProceso(proceso.value))}, en el paso a paso. Después las
+               arrastras a su actividad, o le pides a la app que las reparta.`
+            : '<b>Escoge primero el proceso</b>, arriba: sin entrevista que las '
+              + 'acompañe, es lo único que dice a dónde van.')}
+      </div>`;
+    };
+    if (fotosInp) fotosInp.onchange = () => { revisarSiSePuede(); pintarDondeFotos(); };
+
     archivo.onchange = () => {
       const fs = Array.from(archivo.files || []);
-      if (!fs.length) { info.innerHTML = ''; empezar.disabled = true; return; }
+      revisarSiSePuede();
+      pintarDondeFotos();
+      if (!fs.length) { info.innerHTML = ''; return; }
 
       const total = fs.reduce((a, f) => a + f.size, 0);
       const mb = total / 1048576;
@@ -7140,11 +7179,17 @@ function modalSubirVideo(procesoId) {
             + 'mano, añádelas abajo.'
           : (mb > 6000 ? '<br><b>Es muy pesado.</b> Si graban en 4K, bajen a 1080p: para una entrevista se ve igual y pesa la tercera parte.' : '')}
       </div>`;
-      empezar.disabled = false;
     };
 
     empezar.onclick = async () => {
       const fs = Array.from(archivo.files || []);
+      const soloFotos = Array.from((fotosInp && fotosInp.files) || []);
+      if (!fs.length && soloFotos.length) {
+        empezar.disabled = true;
+        box.querySelector('#svProgreso').classList.remove('oculto');
+        await subirFotosSueltas(proceso.value, soloFotos, box);
+        return;
+      }
       if (!fs.length) return;
       empezar.disabled = true;
       archivo.disabled = true;
@@ -7245,6 +7290,65 @@ function modalRetomarSubida(g) {
       await bucleSubida(f, g.id, 5 * 1024 * 1024, desde, box);
     };
   });
+}
+
+
+/* Quinientas fotos al proceso, sin entrevista.
+
+   Van por tandas pequeñas porque una petición con todas pesaría más de un
+   giga y ningún servidor la recibe. Partirlas tiene otra ventaja: se
+   puede decir cuántas van, en vez de dejar a alguien diez minutos
+   mirando una pantalla quieta sin saber si aquello avanza. */
+const FOTOS_POR_TANDA = 5;
+
+async function subirFotosSueltas(procesoId, fotos, box) {
+  const barra = box.querySelector('#svBarra');
+  const texto = box.querySelector('#svTexto');
+  const cual = box.querySelector('#svCual');
+  const decir = t => { if (texto) texto.textContent = t; };
+  if (cual) cual.textContent = `${fotos.length} fotos`;
+
+  const campoPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c;
+  let hechas = 0, fallidas = 0;
+
+  for (let i = 0; i < fotos.length; i += FOTOS_POR_TANDA) {
+    const tanda = fotos.slice(i, i + FOTOS_POR_TANDA);
+    const cuerpo = new FormData();
+    tanda.forEach(f => cuerpo.append('fotos', f));
+    if (campoPasos) cuerpo.append('campo', campoPasos.id);
+
+    let bien = false;
+    for (let intento = 1; intento <= 3 && !bien; intento++) {
+      try {
+        const r = await fetch(`/api/procesos/${procesoId}/evidencias/lote`,
+                              { method: 'POST', credentials: 'same-origin', body: cuerpo });
+        const d = await r.json();
+        if (!r.ok) throw d;
+        hechas += (d.puestas || []).length;
+        fallidas += (d.rechazadas || []).length;
+        bien = true;
+      } catch (_) {
+        // Una tanda que falla no debe tumbar las quinientas: se reintenta
+        // y, si no, se sigue con las demás y al final se dice cuántas
+        // quedaron fuera.
+        if (intento === 3) fallidas += tanda.length;
+        else await new Promise(r => setTimeout(r, 1500 * intento));
+      }
+    }
+
+    const pc = Math.min(100, (i + tanda.length) / fotos.length * 100);
+    if (barra) barra.style.width = pc.toFixed(1) + '%';
+    decir(`${hechas} de ${fotos.length} subidas`);
+  }
+
+  decir(fallidas
+    ? `${hechas} subidas · ${fallidas} no se pudieron`
+    : `Listas las ${hechas}.`);
+  toast(fallidas ? `${fallidas} foto(s) quedaron fuera` : `${hechas} fotos subidas`);
+  setTimeout(() => {
+    cerrarModal();
+    if (S.procId === procesoId) abrirProceso(procesoId);
+  }, 1400);
 }
 
 
