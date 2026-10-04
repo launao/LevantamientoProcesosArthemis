@@ -370,6 +370,27 @@ def guardar_pasos(gid, pasos):
     return {"ok": True, "pasos": len(limpios)}
 
 
+def _paso_del_minuto(pasos, segundo):
+    """A qué paso pertenece una foto tomada en ese segundo.
+
+    El último que ya había empezado. Si la foto es de antes del primer
+    paso, se la queda el primero: es más útil estar en el paso vecino que
+    quedar suelta al final del documento.
+    """
+    try:
+        seg = float(segundo or 0)
+    except (TypeError, ValueError):
+        return None
+    elegido = None
+    for n, p in enumerate(pasos, 1):
+        try:
+            if float(p.get("desde") or 0) <= seg:
+                elegido = n
+        except (TypeError, ValueError):
+            continue
+    return elegido or (1 if pasos else None)
+
+
 def relacionar(gid, proceso_id):
     """Deja anotado a qué proceso pertenece la entrevista, sin volcarla.
 
@@ -506,6 +527,13 @@ def a_proceso(gid, proceso_id, usuario_id, llenar_campos=True):
 
         info = por_imagen.get(m["n"]) or {}
         paso_n = info.get("paso")
+        if not (paso_n and 1 <= int(paso_n) <= len(pasos)):
+            # Claude no alcanzó a decir a qué paso va, o el repaso de las
+            # imágenes no corrió. Se deduce por el minuto: la foto
+            # pertenece al último paso que ya había empezado cuando se
+            # tomó. Dejarla suelta la mandaba al final del documento,
+            # donde no se entiende de qué es.
+            paso_n = _paso_del_minuto(pasos, m.get("segundo"))
         campo = (f"f_pasos:{desde + int(paso_n) - 1}"
                  if paso_n and 1 <= int(paso_n) <= len(pasos) else "f_pasos")
         nota = info.get("que_muestra") or m.get("por_que", "")

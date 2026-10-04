@@ -1545,10 +1545,31 @@ const EXPLICA_NIVELES = `<div class="niveles">
   </div>
 </div>`;
 
+/* Las fotos de una actividad, incluidas las de sus pasitos.
+
+   Vivían solo dentro del «Detalle», que está cerrado por omisión: una
+   foto que la app sacó del video quedaba pegada a su paso pero invisible
+   en la tabla, así que parecía que no había entrado nada. */
+function fotosDelPaso(cid, i) {
+  const evs = (S.draft && S.draft.evidencias) || [];
+  const mio = cid + ':' + i;
+  return evs.filter(e => e.tipo === 'foto'
+    && (e.campo === mio || String(e.campo || '').startsWith(mio + ':')));
+}
+
+function miniaturasDePaso(fotos) {
+  if (!fotos.length) return '';
+  return fotos.slice(0, 6).map(e => `<button class="act-foto" data-big="/media/${e.mediaId}"
+      title="${esc(e.nota || 'Foto de esta actividad')}">
+      <img src="/media/${e.mediaId}" loading="lazy" alt=""></button>`).join('')
+    + (fotos.length > 6 ? `<span class="tiny">y ${fotos.length - 6} más</span>` : '');
+}
+
 /** Una actividad, con su descripción y sus sub-actividades. */
 function pasoHTML(r, i, ro, cid) {
   const subs = (Array.isArray(r.subtareas) ? r.subtareas : []).map(normalizarSub);
-  const hayDetalle = (r.detalle || '').trim() || subs.length;
+  const fotos = fotosDelPaso(cid, i);
+  const hayDetalle = (r.detalle || '').trim() || subs.length || fotos.length;
   const abierto = S.pasoAbierto === cid + '-' + i;
 
   return `<div class="actividad ${abierto ? 'abierta' : ''}" data-i="${i}">
@@ -1563,9 +1584,15 @@ function pasoHTML(r, i, ro, cid) {
       <input type="text" data-k="tiempo" value="${esc(r.tiempo || '')}"
         placeholder="¿Cuánto tarda?" ${ro}>
       <button class="btn detalle ${hayDetalle ? 'con-detalle' : ''}" data-abrir="${cid}-${i}">
-        ${abierto ? '▾ Cerrar' : (hayDetalle ? `Detalle${subs.length ? ' · ' + subs.length : ''}` : '+ Detalle')}</button>
+        ${abierto ? '▾ Cerrar' : (hayDetalle
+          ? `Detalle${subs.length ? ' · ' + subs.length : ''}${
+              fotos.length ? ' · 📷' + fotos.length : ''}`
+          : '+ Detalle')}</button>
       ${ro ? '<span></span>' : `<button class="btn quitar" data-delpaso="${i}" title="Quitar esta actividad">✕</button>`}
     </div>
+
+    ${abierto ? '' : `<div class="act-fotos" data-actfotos="${cid}:${i}">${
+      miniaturasDePaso(fotos)}</div>`}
 
     ${abierto ? `<div class="act-detalle">
       <div class="f">
@@ -1751,6 +1778,19 @@ function pintarEvidencias(p) {
   if (!p) return;
   const evs = p.evidencias || [];
   const campos = camposFlat();
+
+  // Las miniaturas de cada actividad se repintan aquí porque la evidencia
+  // llega del servidor después de dibujar la tabla: si solo se armaran al
+  // dibujar, las fotos no aparecerían hasta recargar la pantalla.
+  document.querySelectorAll('[data-actfotos]').forEach(box => {
+    const [cid, i] = box.dataset.actfotos.split(':');
+    box.innerHTML = miniaturasDePaso(fotosDelPaso(cid, i));
+    box.querySelectorAll('[data-big]').forEach(b =>
+      b.onclick = () => lightbox(b.dataset.big));
+    const btn = box.parentElement
+      && box.parentElement.querySelector(`[data-abrir="${cid}-${i}"]`);
+    if (btn && box.children.length) btn.classList.add('con-detalle');
+  });
 
   document.querySelectorAll('[data-ev]').forEach(box => {
     const cid = box.dataset.ev;
