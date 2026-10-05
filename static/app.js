@@ -7304,6 +7304,53 @@ function modalRetomarSubida(g) {
    mirando una pantalla quieta sin saber si aquello avanza. */
 const FOTOS_POR_TANDA = 5;
 
+/* Achicar la foto antes de mandarla.
+
+   Una foto de celular pesa entre uno y tres megas y mide cuatro mil
+   píxeles de ancho. Lo que hay que leer en ella —un formato, una
+   pantalla, un sello— se lee igual de bien a mil seiscientos, y así pesa
+   unos doscientos kilos: cinco veces menos que subir, que guardar y que
+   mirar después. Quinientas fotos pasan de seiscientos megas a cien.
+
+   Se hace en el navegador, antes de salir, porque es donde no cuesta: el
+   servidor tendría que recibirlas enteras primero, que es justo lo que
+   lo tumba. */
+const ANCHO_MAX = 1600;
+const CALIDAD = 0.82;
+// Por debajo de esto no vale la pena tocarla: reencodear una foto ya
+// pequeña puede incluso agrandarla.
+const NO_TOCAR = 300 * 1024;
+
+async function achicarFoto(archivo) {
+  if (!/^image\//.test(archivo.type || '') || archivo.size <= NO_TOCAR) return archivo;
+  // Los HEIC del iPhone el navegador no los sabe dibujar; se mandan tal cual.
+  if (/heic|heif/i.test(archivo.type || archivo.name || '')) return archivo;
+
+  try {
+    const bitmap = await createImageBitmap(archivo);
+    if (bitmap.width <= ANCHO_MAX && archivo.size < 900 * 1024) {
+      bitmap.close && bitmap.close();
+      return archivo;
+    }
+    const escala = Math.min(1, ANCHO_MAX / bitmap.width);
+    const lienzo = document.createElement('canvas');
+    lienzo.width = Math.round(bitmap.width * escala);
+    lienzo.height = Math.round(bitmap.height * escala);
+    lienzo.getContext('2d').drawImage(bitmap, 0, 0, lienzo.width, lienzo.height);
+    bitmap.close && bitmap.close();
+
+    const trozo = await new Promise(r => lienzo.toBlob(r, 'image/jpeg', CALIDAD));
+    // Si el resultado no es más liviano, no se gana nada y se manda el original.
+    if (!trozo || trozo.size >= archivo.size) return archivo;
+    return new File([trozo], archivo.name.replace(/\.(heic|heif|png|webp)$/i, '.jpg'),
+                    { type: 'image/jpeg' });
+  } catch (_) {
+    // Si el navegador no puede con ella, se manda como vino: mejor una
+    // foto pesada que ninguna.
+    return archivo;
+  }
+}
+
 /* Manda las fotos de a poquitas, contando en voz alta.
 
    Lo usan los dos caminos —las fotos de una entrevista y las que van
@@ -7320,16 +7367,20 @@ async function porTandas(fotos, box, url, rotulo, extra) {
 
   let hechas = 0, fallidas = 0;
   for (let i = 0; i < fotos.length; i += FOTOS_POR_TANDA) {
-    const tanda = fotos.slice(i, i + FOTOS_POR_TANDA);
-    const cuerpo = new FormData();
-    tanda.forEach(f => cuerpo.append('fotos', f));
-    if (extra) Object.entries(extra).forEach(([k, v]) => cuerpo.append(k, v));
+    const crudas = fotos.slice(i, i + FOTOS_POR_TANDA);
+    decir(`${hechas} de ${fotos.length} · preparando las siguientes…`);
+    const tanda = [];
+    for (const f of crudas) tanda.push(await achicarFoto(f));
 
     let bien = false;
     for (let intento = 1; intento <= 3 && !bien; intento++) {
+      const cuerpo = new FormData();
+      tanda.forEach(f => cuerpo.append('fotos', f));
+      if (extra) Object.entries(extra).forEach(([k, v]) => cuerpo.append(k, v));
       try {
         const r = await fetch(url, { method: 'POST', credentials: 'same-origin',
                                      body: cuerpo });
+        if (r.status === 413) throw { error: 'muy_pesadas' };
         const d = await r.json();
         if (!r.ok) throw d;
         hechas += (d.puestas ? d.puestas.length : tanda.length)
@@ -7338,14 +7389,15 @@ async function porTandas(fotos, box, url, rotulo, extra) {
         bien = true;
       } catch (_) {
         // Una tanda que falla no debe tumbar las quinientas: se reintenta
-        // y, si no, se sigue con las demás.
+        // y, si no, se sigue con las demás. La espera crece porque si el
+        // servidor se está reiniciando, insistir enseguida no ayuda.
         if (intento === 3) fallidas += tanda.length;
-        else await new Promise(r => setTimeout(r, 1500 * intento));
+        else await new Promise(r => setTimeout(r, 2500 * intento));
       }
     }
 
     if (barra) barra.style.width =
-      ((i + tanda.length) / fotos.length * 100).toFixed(1) + '%';
+      ((i + crudas.length) / fotos.length * 100).toFixed(1) + '%';
     decir(`${hechas} de ${fotos.length} subidas`
           + (fallidas ? ` · ${fallidas} no se pudieron` : ''));
   }

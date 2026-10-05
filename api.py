@@ -1916,6 +1916,7 @@ def fotos_de_entrevista(gid):
         if not ctype.startswith("image/"):
             rechazadas.append({"nombre": a.filename, "por_que": "no es una imagen"})
             continue
+        datos, ctype = _achicar_si_hace_falta(datos, ctype)
         mid = _guardar_media_bytes(None, datos, ctype, a.filename or "foto")
         ya.append({"mediaId": mid, "nombre": (a.filename or "")[:200]})
 
@@ -2195,6 +2196,42 @@ def restaurar_version(pid, vid):
 # Evidencias (fotos y audios)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Por encima de esto, una foto se guarda achicada. El navegador ya las
+# manda pequeñas, pero esto cubre lo que llegue de otro sitio: el celular
+# por el enlace, un cliente viejo, un HEIC que el navegador no supo abrir.
+TOPE_FOTO = int(os.environ.get("TOPE_FOTO_KB", "400")) * 1024
+ANCHO_FOTO = 1600
+
+
+def _achicar_si_hace_falta(datos, ctype):
+    """Una foto de cuatro mil píxeles no se lee mejor que una de mil
+    seiscientos, pero ocupa cinco veces más en la base y en la memoria.
+
+    Guardar las grandes fue lo que hizo que el servidor se quedara sin
+    memoria con cincuenta fotos. Si algo sale mal, se guarda la original:
+    una foto pesada es mejor que ninguna.
+    """
+    if len(datos) <= TOPE_FOTO or not ctype.startswith("image/"):
+        return datos, ctype
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(datos))
+        im.load()
+        if im.width > ANCHO_FOTO:
+            alto = round(im.height * ANCHO_FOTO / im.width)
+            im = im.resize((ANCHO_FOTO, alto), Image.LANCZOS)
+        if im.mode not in ("RGB", "L"):
+            im = im.convert("RGB")
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=82, optimize=True)
+        chico = buf.getvalue()
+        if chico and len(chico) < len(datos):
+            return chico, "image/jpeg"
+    except Exception as e:
+        print("[media] no se pudo achicar:", str(e)[:120])
+    return datos, ctype
+
+
 def _guardar_media_bytes(pid, datos, ctype, nombre=""):
     """Guarda un archivo que no vino de una subida, como un fotograma
     sacado de un video. Devuelve su id, o el del que ya estaba si es
@@ -2343,6 +2380,7 @@ def subir_evidencias_lote(pid):
         if not ctype.startswith("image/"):
             rechazadas.append({"nombre": a.filename, "por_que": "no es una imagen"})
             continue
+        datos, ctype = _achicar_si_hace_falta(datos, ctype)
         mid = _guardar_media_bytes(pid, datos, ctype, a.filename or "foto")
         eid = _nuevo_id("e_")
         D.execute(
