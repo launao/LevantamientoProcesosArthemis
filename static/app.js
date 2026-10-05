@@ -4670,7 +4670,16 @@ function vistaRevision(m) {
   const devueltos = S.procesos.filter(p => p.notaRevision && p.estado === 'en_curso');
 
   const listas = { esperando: enviados, aprobados, devueltos };
-  const lista = listas[S.filtroRev] || enviados;
+  let lista = listas[S.filtroRev] || enviados;
+
+  // Las áreas se sacan de lo que hay en la pestaña que se está mirando,
+  // no de todo el catálogo: ofrecer «Facturación» cuando no hay nada de
+  // facturación esperando revisión solo hace perder el tiempo.
+  const areas = [...new Set(lista.map(p => (p.area || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  const sinArea = lista.some(p => !(p.area || '').trim());
+  if (S.filtroAreaRev === '__sin__') lista = lista.filter(p => !(p.area || '').trim());
+  else if (S.filtroAreaRev) lista = lista.filter(p => (p.area || '').trim() === S.filtroAreaRev);
 
   m.innerHTML = `
   <div class="topbar"><h1>Revisión</h1><div class="sp"></div>
@@ -4682,9 +4691,23 @@ function vistaRevision(m) {
       <button class="tab ${S.filtroRev === 'devueltos' ? 'on' : ''}" data-rev="devueltos">
         Devueltos <span class="tiny">${devueltos.length}</span></button>
     </div>
+    <select id="areaRev" title="Filtrar por área">
+      <option value="">Todas las áreas</option>
+      ${areas.map(a => `<option value="${esc(a)}" ${
+        S.filtroAreaRev === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}
+      ${sinArea ? `<option value="__sin__" ${
+        S.filtroAreaRev === '__sin__' ? 'selected' : ''}>Sin área</option>` : ''}
+    </select>
     <button class="btn sm" id="verLotes">📚 Análisis en conjunto</button>
     <a class="btn sm" href="#/mapa">⤳ Ver el mapa</a>
   </div>
+
+  ${S.filtroAreaRev ? `<div class="flex" style="gap:10px;margin-bottom:12px">
+    <span class="tiny">Viendo solo <b>${esc(S.filtroAreaRev === '__sin__'
+      ? 'los que no tienen área' : S.filtroAreaRev)}</b>:
+      ${lista.length} de ${(listas[S.filtroRev] || []).length}</span>
+    <button class="btn sm" id="limpiarArea">Ver todas las áreas</button>
+  </div>` : ''}
 
   <div class="card barra-lote">
     <label class="flex" style="gap:10px;cursor:pointer">
@@ -4695,10 +4718,14 @@ function vistaRevision(m) {
     <button class="btn p" id="analizarLote" disabled>✨ Analizar los seleccionados</button>
   </div>
 
-  ${S.filtroRev === 'esperando' && !enviados.length
-    ? `<div class="empty"><span class="e">✓</span>
-        Nada esperando. Cuando una analista pulse Enviar, el proceso aparece aquí.</div>`
-    : ''}
+  ${!lista.length ? (S.filtroAreaRev
+    ? `<div class="empty"><span class="e">∅</span>
+        Nada de esta área en esta pestaña.<br>
+        <span class="tiny">Prueba con otra área, o quita el filtro.</span></div>`
+    : (S.filtroRev === 'esperando'
+      ? `<div class="empty"><span class="e">✓</span>
+          Nada esperando. Cuando una analista pulse Enviar, el proceso aparece aquí.</div>`
+      : '')) : ''}
 
   <div class="revision-lista">
     ${lista.sort((a, b) => (b.enviadoEn || '').localeCompare(a.enviadoEn || ''))
@@ -4706,8 +4733,25 @@ function vistaRevision(m) {
   </div>`;
 
   m.querySelectorAll('[data-rev]').forEach(b => b.onclick = () => {
-    S.filtroRev = b.dataset.rev; vistaRevision(m);
+    S.filtroRev = b.dataset.rev;
+    // El área elegida se conserva al cambiar de pestaña; si en la nueva
+    // no existe, el desplegable vuelve solo a «todas» porque el área ya
+    // no está entre las opciones.
+    vistaRevision(m);
   });
+
+  const selArea = document.getElementById('areaRev');
+  if (selArea) selArea.onchange = () => {
+    S.filtroAreaRev = selArea.value;
+    // Lo marcado deja de verse al filtrar, y analizar en conjunto algo
+    // que no se ve es una forma segura de equivocarse.
+    S.selLote = [];
+    vistaRevision(m);
+  };
+  const limpiar = document.getElementById('limpiarArea');
+  if (limpiar) limpiar.onclick = () => {
+    S.filtroAreaRev = ''; S.selLote = []; vistaRevision(m);
+  };
 
   S.selLote = S.selLote || [];
   const refrescarSel = () => {
