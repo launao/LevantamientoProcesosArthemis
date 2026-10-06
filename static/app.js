@@ -1963,6 +1963,20 @@ function colgarDestino(el, ref) {
    Se lee el formato a mano —son cien líneas— en vez de traer una
    biblioteca de internet: la app tiene que funcionar también el día que
    ese servidor de internet no esté. */
+// La mitad alta de la tabla vieja de MS-DOS (CP437), que es donde están
+// las tildes y la eñe. El navegador no sabe decodificarla, así que va
+// escrita: son 128 caracteres y no cambian nunca.
+const TABLA_DOS =
+  'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00a0';
+
+function decodificarDOS(bytes) {
+  let salida = '';
+  for (const b of bytes) {
+    salida += b < 128 ? String.fromCharCode(b) : TABLA_DOS[b - 128];
+  }
+  return salida;
+}
+
 async function leerZip(archivo) {
   const buf = await archivo.arrayBuffer();
   const v = new DataView(buf);
@@ -1988,8 +2002,15 @@ async function leerZip(archivo) {
     const largoExtra = v.getUint16(p + 30, true);
     const largoCom = v.getUint16(p + 32, true);
     const desde = v.getUint32(p + 42, true);
-    const nombre = new TextDecoder('utf-8')
-      .decode(new Uint8Array(buf, p + 46, largoNombre));
+    // Los nombres solo van en UTF-8 si el zip lo dice en su bandera 11.
+    // Los que hace Windows con la opción de siempre los guardan en la
+    // tabla vieja de MS-DOS, y leerlos como UTF-8 convertía la eñe de
+    // «PESTAÑAS» en un rombo con interrogación.
+    const banderas = v.getUint16(p + 8, true);
+    const crudoNombre = new Uint8Array(buf, p + 46, largoNombre);
+    const nombre = (banderas & 0x800)
+      ? new TextDecoder('utf-8').decode(crudoNombre)
+      : decodificarDOS(crudoNombre);
     p += 46 + largoNombre + largoExtra + largoCom;
 
     if (nombre.endsWith('/')) continue;

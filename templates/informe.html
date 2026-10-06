@@ -181,6 +181,10 @@
                     <div class="audio" style="background:var(--surface);margin-bottom:8px">
                       <div class="t">✎ Nota escrita</div>
                       <div style="white-space:pre-wrap;font-size:14px">{{ e.nota }}</div></div>
+                  {% elif e.tipo == 'documento' %}
+                    <div class="audio" style="margin-bottom:8px"><div class="t">📄 Documento</div>
+                      <a href="{{ medio(e.mediaId) }}" target="_blank" rel="noopener"
+                         style="font-size:14px;font-weight:600;word-break:break-word">{{ e.nota or 'Abrir el documento' }}</a></div>
                   {% else %}
                     <div class="audio" style="margin-bottom:8px"><div class="t">🎙 Nota de voz
                       {% if e.duracion %}<span class="tiny">{{ (e.duracion // 60) }}:{{ '%02d' % (e.duracion % 60) }}</span>{% endif %}</div>
@@ -208,6 +212,12 @@
                   <div class="t">✎ Nota escrita</div>
                   <div style="white-space:pre-wrap;font-size:14px;line-height:1.6">{{ e.nota }}</div>
                   <span class="marca">{{ e.autor }} · {{ e.fecha }}</span>
+                </div>
+              {% elif e.tipo == 'documento' %}
+                <div class="audio">
+                  <div class="t">📄 Documento</div>
+                  <a href="{{ medio(e.mediaId) }}" target="_blank" rel="noopener"
+                     style="font-size:14px;font-weight:600;word-break:break-word">{{ e.nota or 'Abrir el documento' }}</a>
                 </div>
               {% else %}
                 <div class="audio">
@@ -243,6 +253,12 @@
                 <div class="t">✎ Nota escrita</div>
                 <div style="white-space:pre-wrap;font-size:14px;line-height:1.6">{{ e.nota }}</div>
                 <span class="marca">{{ e.autor }} · {{ e.fecha }}</span>
+              </div>
+            {% elif e.tipo == 'documento' %}
+              <div class="audio">
+                <div class="t">📄 Documento</div>
+                <a href="{{ medio(e.mediaId) }}" target="_blank" rel="noopener"
+                   style="font-size:14px;font-weight:600;word-break:break-word">{{ e.nota or 'Abrir el documento' }}</a>
               </div>
             {% else %}
               <div class="audio">
