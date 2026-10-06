@@ -1942,6 +1942,9 @@ def fotos_de_entrevista(gid):
     for a in archivos[:60]:
         datos = a.read()
         if not datos:
+            # Antes se saltaba sin decir nada: con cincuenta archivos,
+            # nadie se iba a dar cuenta de que faltaban tres.
+            rechazadas.append({"nombre": a.filename, "por_que": "llegó vacío"})
             continue
         if len(datos) > MAX_MEDIA:
             rechazadas.append({"nombre": a.filename, "por_que": "muy pesada"})
@@ -2408,24 +2411,33 @@ def subir_evidencias_lote(pid):
     for i, a in enumerate(archivos[:40], 1):
         datos = a.read()
         if not datos:
+            # Antes se saltaba sin decir nada: con cincuenta archivos,
+            # nadie se iba a dar cuenta de que faltaban tres.
+            rechazadas.append({"nombre": a.filename, "por_que": "llegó vacío"})
             continue
         if len(datos) > MAX_MEDIA:
             rechazadas.append({"nombre": a.filename, "por_que": "muy pesada"})
             continue
+        # El tipo que declara el navegador, y si no dice nada, la extensión:
+        # un archivo sacado de un zip llega sin tipo declarado.
         ctype = (a.mimetype or "").split(";")[0].strip()
-        if not ctype.startswith("image/"):
-            rechazadas.append({"nombre": a.filename, "por_que": "no es una imagen"})
+        if ctype not in TIPOS_OK:
+            ctype = PORTIPO.get(os.path.splitext(a.filename or "")[1].lower(), "")
+        if ctype not in TIPOS_OK:
+            rechazadas.append({"nombre": a.filename,
+                               "por_que": "no es un documento ni una imagen"})
             continue
         datos, ctype = _achicar_si_hace_falta(datos, ctype)
-        mid = _guardar_media_bytes(pid, datos, ctype, a.filename or "foto")
+        clase = _clase_de(ctype)
+        mid = _guardar_media_bytes(pid, datos, ctype, a.filename or clase)
         eid = _nuevo_id("e_")
         D.execute(
             "INSERT INTO evidencias (id, proceso_id, campo_id, tipo, media_id, nota, "
             "autor_id, origen, orden) VALUES (?,?,?,?,?,?,?,?,?)",
-            (eid, pid, campo, "foto", mid, (a.filename or "")[:200], u["id"],
+            (eid, pid, campo, clase, mid, (a.filename or "")[:200], u["id"],
              "lote", base + i))
         puestas.append({"id": eid, "mediaId": mid, "campo": campo,
-                        "nombre": a.filename or ""})
+                        "tipo": clase, "nombre": a.filename or ""})
 
     if puestas:
         auditar("fotos_en_lote", "proceso", pid, f"{len(puestas)} fotos")

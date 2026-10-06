@@ -1952,6 +1952,88 @@ function colgarDestino(el, ref) {
    con cincuenta y ocho consentimientos. Escogerlos uno por uno es media
    hora de clics, y lo que de verdad hace falta es que queden todos
    dentro del proceso con su nombre. */
+/* Abrir un .zip aquí mismo, sin mandarlo entero.
+
+   Mandar la carpeta completa al servidor falla de dos maneras que no se
+   distinguen desde fuera: pesa más de lo que acepta una petición, o tarda
+   más de los dos minutos que el servidor da para contestar. Abrirla en el
+   navegador quita las dos: salen los archivos uno a uno y se mandan por
+   tandas, con avance, como las fotos.
+
+   Se lee el formato a mano —son cien líneas— en vez de traer una
+   biblioteca de internet: la app tiene que funcionar también el día que
+   ese servidor de internet no esté. */
+async function leerZip(archivo) {
+  const buf = await archivo.arrayBuffer();
+  const v = new DataView(buf);
+
+  // El índice del zip está al final, no al principio: hay que buscar su
+  // marca hacia atrás, saltando el comentario que pueda llevar.
+  let fin = -1;
+  for (let i = buf.byteLength - 22; i >= 0 && i > buf.byteLength - 65558; i--) {
+    if (v.getUint32(i, true) === 0x06054b50) { fin = i; break; }
+  }
+  if (fin < 0) throw new Error('no_es_zip');
+
+  const cuantos = v.getUint16(fin + 10, true);
+  let p = v.getUint32(fin + 16, true);
+  const salida = [];
+
+  for (let n = 0; n < cuantos; n++) {
+    if (v.getUint32(p, true) !== 0x02014b50) break;
+    const metodo = v.getUint16(p + 10, true);
+    const comprimido = v.getUint32(p + 20, true);
+    const crudo = v.getUint32(p + 24, true);
+    const largoNombre = v.getUint16(p + 28, true);
+    const largoExtra = v.getUint16(p + 30, true);
+    const largoCom = v.getUint16(p + 32, true);
+    const desde = v.getUint32(p + 42, true);
+    const nombre = new TextDecoder('utf-8')
+      .decode(new Uint8Array(buf, p + 46, largoNombre));
+    p += 46 + largoNombre + largoExtra + largoCom;
+
+    if (nombre.endsWith('/')) continue;
+    // La cabecera local repite el nombre y los extras, y sus largos no
+    // tienen por qué coincidir con los del índice: hay que leerlos ahí.
+    const nLocal = v.getUint16(desde + 26, true);
+    const eLocal = v.getUint16(desde + 28, true);
+    const inicio = desde + 30 + nLocal + eLocal;
+    const datos = new Uint8Array(buf, inicio, comprimido);
+
+    let contenido;
+    if (metodo === 0) contenido = datos;
+    else if (metodo === 8) {
+      const flujo = new Blob([datos]).stream()
+        .pipeThrough(new DecompressionStream('deflate-raw'));
+      contenido = new Uint8Array(await new Response(flujo).arrayBuffer());
+    } else continue;          // formatos raros de compresión: se saltan
+
+    salida.push({ nombre, bytes: contenido, tamano: crudo || contenido.length });
+  }
+  return salida;
+}
+
+// Lo que mete el sistema operativo al comprimir, y lo que no es un
+// documento ni una imagen.
+const EXT_OK = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'pptx', 'odt', 'txt',
+                'csv', 'rtf', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'];
+
+function utilesDelZip(entradas) {
+  const buenas = [], fuera = [];
+  for (const e of entradas) {
+    const nombre = e.nombre.split('/').pop();
+    if (!nombre || nombre.startsWith('.') || e.nombre.includes('__MACOSX')) continue;
+    const ext = (nombre.split('.').pop() || '').toLowerCase();
+    if (!EXT_OK.includes(ext)) {
+      fuera.push({ nombre, por_que: 'no es un documento ni una imagen' });
+      continue;
+    }
+    buenas.push(new File([e.bytes], nombre));
+  }
+  return { buenas, fuera };
+}
+
+
 function modalZip(campo) {
   modal(`<h3>Subir una carpeta comprimida</h3>
     <p class="mut" style="margin-top:-6px">
@@ -1959,11 +2041,17 @@ function modalZip(campo) {
       formatos. Se abre aquí y cada archivo queda por separado, con su nombre.</p>
 
     <label class="f"><span class="lbl">El archivo .zip</span>
-      <span class="hint">PDF, Word, Excel, imágenes. Hasta 80 MB por carpeta: si
-        pesa más, pártela en dos y súbelas una tras otra.</span>
+      <span class="hint">PDF, Word, Excel, imágenes. La carpeta se abre aquí en tu
+        computador y los archivos se mandan de a pocos, así que el tamaño no es
+        problema: lo que tarda es la conexión.</span>
       <input type="file" id="zpArchivo" accept=".zip,application/zip"></label>
 
     <div id="zpInfo"></div>
+    <div id="zpProgreso" class="oculto" style="margin-top:14px">
+      <div class="sv-barra"><i id="svBarra" style="width:0%"></i></div>
+      <div class="tiny" id="svCual" style="margin-top:8px;font-weight:650"></div>
+      <div class="tiny" id="svTexto" style="margin-top:4px"></div>
+    </div>
 
     <div class="flex" style="margin-top:16px">
       <button class="btn" data-cerrar>Cerrar</button>
@@ -1979,45 +2067,55 @@ function modalZip(campo) {
       btn.disabled = !f;
       if (!f) { info.innerHTML = ''; return; }
       const mb = f.size / 1048576;
-      info.innerHTML = `<div class="aviso-ia ${mb > 80 ? 'error' : ''}">
+      info.innerHTML = `<div class="aviso-ia">
         <b>${esc(f.name)}</b> · ${Math.round(mb)} MB
-        ${mb > 80 ? '<br><b>Pesa demasiado.</b> Pártela en dos carpetas más pequeñas.'
-                  : '<br>Puede tardar un par de minutos. No cierres esta ventana.'}
+        <br>Se abre aquí y los archivos se suben de a pocos. No cierres esta ventana.
       </div>`;
-      if (mb > 80) btn.disabled = true;
     };
 
     btn.onclick = async () => {
       const f = inp.files[0];
       if (!f) return;
-      btn.disabled = true; btn.textContent = 'Abriendo la carpeta…';
-      const cuerpo = new FormData();
-      cuerpo.append('archivo', f);
-      cuerpo.append('campo', campo || '');
+      btn.disabled = true;
+      btn.textContent = 'Abriendo la carpeta…';
+      box.querySelector('#zpProgreso').classList.remove('oculto');
+
+      let entradas;
       try {
-        const r = await fetch(`/api/procesos/${S.procId}/adjuntos/zip`,
-                              { method: 'POST', credentials: 'same-origin', body: cuerpo });
-        const d = await r.json();
-        if (!r.ok) throw d;
-        const fuera = d.rechazadas || [];
-        info.innerHTML = `<div class="aviso-ia ok">
-          Entraron <b>${(d.puestas || []).length} archivo(s)</b>.
-          ${fuera.length ? `<div class="tiny" style="margin-top:8px">
-            Quedaron fuera ${fuera.length}:<br>${fuera.slice(0, 12).map(x =>
-              esc(x.nombre) + ' — ' + esc(x.por_que)).join('<br>')}
-            ${fuera.length > 12 ? '<br>…y ' + (fuera.length - 12) + ' más' : ''}
-          </div>` : ''}
-        </div>`;
-        btn.textContent = 'Listo';
-        setTimeout(() => { cerrarModal(); abrirProceso(S.procId); }, fuera.length ? 4000 : 1500);
+        entradas = await leerZip(f);
       } catch (e) {
-        const c = (e && e.error) || '';
-        info.innerHTML = `<div class="aviso-ia error">${
-          c === 'no_es_zip' ? 'Ese archivo no es una carpeta comprimida que se pueda abrir.'
-          : c === 'no_es_tuyo' ? 'Este proceso no es tuyo.'
-          : 'No se pudo subir. Si la carpeta es muy grande, pártela en dos.'}</div>`;
+        info.innerHTML = `<div class="aviso-ia error">
+          No se pudo abrir la carpeta. ${e && e.message === 'no_es_zip'
+            ? 'No parece un .zip.'
+            : 'Puede estar dañada o protegida con contraseña.'}</div>`;
         btn.disabled = false; btn.textContent = 'Subir la carpeta';
+        return;
       }
+
+      const { buenas, fuera } = utilesDelZip(entradas);
+      if (!buenas.length) {
+        info.innerHTML = `<div class="aviso-ia error">
+          La carpeta no trae ningún documento ni imagen que se pueda guardar.</div>`;
+        btn.disabled = false; btn.textContent = 'Subir la carpeta';
+        return;
+      }
+
+      btn.textContent = `Subiendo ${buenas.length}…`;
+      const { hechas, fallidas } = await porTandas(
+        buenas, box, `/api/procesos/${S.procId}/evidencias/lote`,
+        'Subiendo los documentos', campo ? { campo } : null);
+
+      const total = fuera.length + fallidas;
+      info.innerHTML = `<div class="aviso-ia ${hechas ? 'ok' : 'error'}">
+        Entraron <b>${hechas} archivo(s)</b> de ${buenas.length}.
+        ${total ? `<div class="tiny" style="margin-top:8px">
+          Quedaron fuera ${total}${fallidas ? ` (${fallidas} por fallos al subir)` : ''}:<br>
+          ${fuera.slice(0, 10).map(x => esc(x.nombre) + ' — ' + esc(x.por_que)).join('<br>')}
+          ${fuera.length > 10 ? '<br>…y ' + (fuera.length - 10) + ' más' : ''}
+        </div>` : ''}
+      </div>`;
+      btn.textContent = 'Listo';
+      setTimeout(() => { cerrarModal(); abrirProceso(S.procId); }, total ? 5000 : 1600);
     };
   });
 }
