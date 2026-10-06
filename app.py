@@ -42,7 +42,12 @@ def crear_app():
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=bool(os.environ.get("RAILWAY_ENVIRONMENT")),
         PERMANENT_SESSION_LIFETIME=timedelta(days=int(os.environ.get("SESSION_DIAS", "14"))),
-        MAX_CONTENT_LENGTH=int(os.environ.get("MAX_MEDIA_MB", "25")) * 1024 * 1024 + 1024 * 512,
+        # El tope de una petición. Manda el más grande de los dos usos: un
+        # archivo suelto (25 MB) y una carpeta comprimida con los
+        # consentimientos de la clínica, que son decenas de PDF.
+        MAX_CONTENT_LENGTH=max(int(os.environ.get("MAX_MEDIA_MB", "25")),
+                               int(os.environ.get("MAX_ZIP_MB", "80"))) * 1024 * 1024
+                           + 1024 * 512,
         JSON_SORT_KEYS=False,
     )
 

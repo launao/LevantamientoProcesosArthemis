@@ -45,8 +45,42 @@ TIPOS_OK = {
     "image/jpeg", "image/png", "image/webp", "image/gif",
     "image/heic", "image/heif",
     "audio/webm", "audio/mp4", "audio/mpeg", "audio/ogg", "audio/wav",
-    "video/webm", "video/mp4", "application/pdf",
+    "video/webm", "video/mp4",
+    # Documentos: los consentimientos, protocolos y formatos que la clínica
+    # ya tiene escritos. Son parte del levantamiento tanto como una foto.
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "text/plain", "text/csv", "text/rtf", "application/rtf",
 }
+
+# Por la extensión, cuando el navegador o el zip no declaran el tipo.
+PORTIPO = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".txt": "text/plain", ".csv": "text/csv", ".rtf": "application/rtf",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".webp": "image/webp", ".gif": "image/gif",
+    ".heic": "image/heic", ".heif": "image/heif",
+}
+
+
+def _clase_de(ctype):
+    """Qué es, para la pantalla: una foto, un audio o un documento."""
+    if ctype.startswith("image/"):
+        return "foto"
+    if ctype.startswith("audio/") or ctype.startswith("video/"):
+        return "audio"
+    return "documento"
 MAX_MEDIA = int(os.environ.get("MAX_MEDIA_MB", "25")) * 1024 * 1024
 
 
@@ -2274,7 +2308,9 @@ def _guardar_evidencia(pid, archivo, form, autor_id, origen="app"):
     if ctype not in TIPOS_OK:
         return {"error": "tipo_no_permitido", "tipo": ctype}, 415
 
-    tipo = form.get("tipo") or ("foto" if ctype.startswith("image/") else "audio")
+    # Un PDF entraba marcado como audio, porque solo se distinguía foto de
+    # «todo lo demás». En pantalla salía con un reproductor que no sonaba.
+    tipo = form.get("tipo") or _clase_de(ctype)
     campo = form.get("campo") or ""
     nota = (form.get("nota") or "")[:2000]
     try:
@@ -2394,6 +2430,99 @@ def subir_evidencias_lote(pid):
     if puestas:
         auditar("fotos_en_lote", "proceso", pid, f"{len(puestas)} fotos")
     return jsonify({"ok": True, "puestas": puestas, "rechazadas": rechazadas})
+
+
+@api.post("/procesos/<pid>/adjuntos/zip")
+@puede_editar
+def subir_zip(pid):
+    """Una carpeta comprimida entera: cincuenta y ocho consentimientos.
+
+    Es como llegan de verdad: alguien los manda por correo en un .zip y
+    volver a escogerlos uno por uno es media hora de clics. Se abre aquí,
+    se guarda cada archivo por separado y se devuelve la lista para que
+    quien sube vea qué entró y qué no.
+    """
+    import zipfile
+
+    p = D.row("SELECT id, responsable_id FROM procesos WHERE id=?", (pid,))
+    if not p:
+        return jsonify({"error": "no_existe"}), 404
+    u = usuario_actual()
+    if not _mio(p, u):
+        return jsonify({"error": "no_es_tuyo"}), 403
+
+    f = request.files.get("archivo")
+    if not f:
+        return jsonify({"error": "sin_archivo"}), 400
+
+    campo = (request.form.get("campo") or "").strip()
+    try:
+        # Se lee del archivo temporal que ya hizo el servidor, no de la
+        # memoria: un zip de cincuenta megas cargado entero es justo lo
+        # que tumbó el contenedor con las fotos.
+        f.stream.seek(0)
+        z = zipfile.ZipFile(f.stream)
+    except Exception:
+        return jsonify({"error": "no_es_zip",
+                        "detalle": "El archivo no es una carpeta comprimida "
+                                   "que se pueda abrir."}), 415
+
+    base = D.row("SELECT COALESCE(MAX(orden),0) m FROM evidencias WHERE proceso_id=?",
+                 (pid,))["m"] or 0
+    puestas, rechazadas = [], []
+    total = 0
+
+    for info in sorted(z.infolist(), key=lambda x: x.filename):
+        if info.is_dir():
+            continue
+        nombre = os.path.basename(info.filename)
+        # Lo que mete el Mac al comprimir, y los ocultos: no son del equipo.
+        if not nombre or nombre.startswith(".") or "__MACOSX" in info.filename:
+            continue
+        if len(puestas) + len(rechazadas) >= 200:
+            rechazadas.append({"nombre": nombre, "por_que": "el zip trae demasiados"})
+            break
+        if info.file_size > MAX_MEDIA:
+            rechazadas.append({"nombre": nombre,
+                               "por_que": f"pesa más de {MAX_MEDIA // (1024*1024)} MB"})
+            continue
+        # Un zip puede anunciar poco y traer gigas al descomprimirse. Se
+        # corta antes de que eso tumbe el servidor.
+        total += info.file_size
+        if total > 300 * 1024 * 1024:
+            rechazadas.append({"nombre": nombre, "por_que": "la carpeta es demasiado grande"})
+            break
+
+        ext = os.path.splitext(nombre)[1].lower()
+        ctype = PORTIPO.get(ext, "")
+        if ctype not in TIPOS_OK:
+            rechazadas.append({"nombre": nombre,
+                               "por_que": "no es un documento ni una imagen"})
+            continue
+        try:
+            datos = z.read(info)
+        except Exception:
+            rechazadas.append({"nombre": nombre, "por_que": "no se pudo leer"})
+            continue
+        if not datos:
+            continue
+
+        datos, ctype = _achicar_si_hace_falta(datos, ctype)
+        mid = _guardar_media_bytes(pid, datos, ctype, nombre)
+        eid = _nuevo_id("e_")
+        D.execute(
+            "INSERT INTO evidencias (id, proceso_id, campo_id, tipo, media_id, nota, "
+            "autor_id, origen, orden) VALUES (?,?,?,?,?,?,?,?,?)",
+            (eid, pid, campo, _clase_de(ctype), mid, nombre[:200], u["id"],
+             "zip", base + len(puestas) + 1))
+        puestas.append({"id": eid, "mediaId": mid, "nombre": nombre,
+                        "tipo": _clase_de(ctype)})
+
+    if puestas:
+        auditar("zip_desarmado", "proceso", pid,
+                f"{len(puestas)} archivos de {f.filename}")
+    return jsonify({"ok": True, "puestas": puestas, "rechazadas": rechazadas,
+                    "archivo": f.filename or ""})
 
 
 @api.put("/evidencias/<eid>")

@@ -1098,3 +1098,13 @@ body.moviendo-foto .actividad{outline:2px dashed color-mix(in srgb,var(--accent)
   transition:width .3s}
 #svArchivo{padding:12px;font-size:15px}
 .oculto{display:none}
+
+/* Un documento no se mira: se abre. Por eso va como un enlace con su
+   nombre y no como una miniatura que no dice nada. */
+.ev-item.doc{display:flex;flex-direction:column;gap:6px}
+.doc-enlace{display:flex;align-items:center;gap:9px;padding:11px 12px;
+  border:1.5px solid var(--line);border-radius:10px;background:var(--surface);
+  text-decoration:none;color:var(--ink)}
+.doc-enlace:hover{border-color:var(--accent);background:var(--surface-2)}
+.doc-ico{font-size:21px;line-height:1}
+.doc-nom{font-size:14.5px;font-weight:600;word-break:break-word}

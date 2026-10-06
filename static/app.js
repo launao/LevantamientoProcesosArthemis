@@ -1529,6 +1529,7 @@ function campoHTML(c, v, grande) {
       <button class="btn accion" data-cam="${c.id}"><span class="ico">📷</span> Tomar foto</button>
       <button class="btn accion" data-file="${c.id}"><span class="ico">🖼</span> Subir imagen</button>
       <button class="btn accion" data-qr="${c.id}"><span class="ico">📱</span> Usar el celular</button>
+      <button class="btn accion" data-zip="${c.id}"><span class="ico">🗂</span> Carpeta .zip</button>
       <span class="rec-slot" data-recslot="${c.id}"></span></div>`}
     <div class="ev" data-ev="${c.id}"></div>
   </div>`;
@@ -1666,6 +1667,7 @@ function pasoHTML(r, i, ro, cid) {
 /** Los mismos botones de evidencia, reutilizables en cualquier nivel. */
 function herramientasEvidencia(ref, queEs) {
   return `<div class="ftools">
+    <button class="btn accion" data-zip="${ref}" title="Subir una carpeta comprimida"><span class="ico">🗂</span> Carpeta .zip</button>
     <button class="btn accion" data-mic="${ref}" title="Grabar audio sobre ${queEs}"><span class="ico">🎙</span> Grabar</button>
     <button class="btn accion" data-cam="${ref}" title="Tomar foto de ${queEs}"><span class="ico">📷</span> Foto</button>
     <button class="btn accion" data-file="${ref}"><span class="ico">🖼</span> Subir</button>
@@ -1807,6 +1809,7 @@ function conectarCampos(cont) {
   cont.querySelectorAll('[data-cam]').forEach(b => b.onclick = () => pedirImagen(b.dataset.cam, true));
   cont.querySelectorAll('[data-file]').forEach(b => b.onclick = () => pedirImagen(b.dataset.file, false));
   cont.querySelectorAll('[data-qr]').forEach(b => b.onclick = () => modalQR(S.draft, b.dataset.qr));
+  cont.querySelectorAll('[data-zip]').forEach(b => b.onclick = () => modalZip(b.dataset.zip));
 }
 
 /* ── Evidencias ───────────────────────────────────────────────── */
@@ -1943,6 +1946,83 @@ function colgarDestino(el, ref) {
   };
 }
 
+/* Subir una carpeta comprimida entera.
+
+   Es como llega el material de verdad: alguien manda por correo un .zip
+   con cincuenta y ocho consentimientos. Escogerlos uno por uno es media
+   hora de clics, y lo que de verdad hace falta es que queden todos
+   dentro del proceso con su nombre. */
+function modalZip(campo) {
+  modal(`<h3>Subir una carpeta comprimida</h3>
+    <p class="mut" style="margin-top:-6px">
+      Para cuando llegan muchos documentos juntos: consentimientos, protocolos,
+      formatos. Se abre aquí y cada archivo queda por separado, con su nombre.</p>
+
+    <label class="f"><span class="lbl">El archivo .zip</span>
+      <span class="hint">PDF, Word, Excel, imágenes. Hasta 80 MB por carpeta: si
+        pesa más, pártela en dos y súbelas una tras otra.</span>
+      <input type="file" id="zpArchivo" accept=".zip,application/zip"></label>
+
+    <div id="zpInfo"></div>
+
+    <div class="flex" style="margin-top:16px">
+      <button class="btn" data-cerrar>Cerrar</button>
+      <button class="btn p right" id="zpSubir" disabled>Subir la carpeta</button>
+    </div>`, box => {
+
+    const inp = box.querySelector('#zpArchivo');
+    const btn = box.querySelector('#zpSubir');
+    const info = box.querySelector('#zpInfo');
+
+    inp.onchange = () => {
+      const f = inp.files[0];
+      btn.disabled = !f;
+      if (!f) { info.innerHTML = ''; return; }
+      const mb = f.size / 1048576;
+      info.innerHTML = `<div class="aviso-ia ${mb > 80 ? 'error' : ''}">
+        <b>${esc(f.name)}</b> · ${Math.round(mb)} MB
+        ${mb > 80 ? '<br><b>Pesa demasiado.</b> Pártela en dos carpetas más pequeñas.'
+                  : '<br>Puede tardar un par de minutos. No cierres esta ventana.'}
+      </div>`;
+      if (mb > 80) btn.disabled = true;
+    };
+
+    btn.onclick = async () => {
+      const f = inp.files[0];
+      if (!f) return;
+      btn.disabled = true; btn.textContent = 'Abriendo la carpeta…';
+      const cuerpo = new FormData();
+      cuerpo.append('archivo', f);
+      cuerpo.append('campo', campo || '');
+      try {
+        const r = await fetch(`/api/procesos/${S.procId}/adjuntos/zip`,
+                              { method: 'POST', credentials: 'same-origin', body: cuerpo });
+        const d = await r.json();
+        if (!r.ok) throw d;
+        const fuera = d.rechazadas || [];
+        info.innerHTML = `<div class="aviso-ia ok">
+          Entraron <b>${(d.puestas || []).length} archivo(s)</b>.
+          ${fuera.length ? `<div class="tiny" style="margin-top:8px">
+            Quedaron fuera ${fuera.length}:<br>${fuera.slice(0, 12).map(x =>
+              esc(x.nombre) + ' — ' + esc(x.por_que)).join('<br>')}
+            ${fuera.length > 12 ? '<br>…y ' + (fuera.length - 12) + ' más' : ''}
+          </div>` : ''}
+        </div>`;
+        btn.textContent = 'Listo';
+        setTimeout(() => { cerrarModal(); abrirProceso(S.procId); }, fuera.length ? 4000 : 1500);
+      } catch (e) {
+        const c = (e && e.error) || '';
+        info.innerHTML = `<div class="aviso-ia error">${
+          c === 'no_es_zip' ? 'Ese archivo no es una carpeta comprimida que se pueda abrir.'
+          : c === 'no_es_tuyo' ? 'Este proceso no es tuyo.'
+          : 'No se pudo subir. Si la carpeta es muy grande, pártela en dos.'}</div>`;
+        btn.disabled = false; btn.textContent = 'Subir la carpeta';
+      }
+    };
+  });
+}
+
+
 function destinosParaMover(actual) {
   const pasos = ((S.draft && S.draft.respuestas && S.draft.respuestas.f_pasos) || []);
   const campoPasos = (camposFlat().find(x => x.c.tipo === 'pasos') || {}).c;
@@ -2036,6 +2116,23 @@ function pintarEvidencias(p) {
                      title="Arrástrala a su actividad">
           <img class="thumb" src="${url}" alt="evidencia" data-big="${url}">
           <div class="pie">${cel ? '<span class="tiny">📱</span>' : ''}${acciones}</div></div>`;
+
+      if (e.tipo === 'documento') {
+        // Un PDF con un reproductor de audio encima no se abre nunca. Se
+        // muestra como lo que es: un archivo con su nombre, para abrirlo.
+        const n = e.nota || 'documento';
+        const ext = (n.split('.').pop() || '').toLowerCase();
+        const icono = ext === 'pdf' ? '📕'
+          : ['doc', 'docx', 'odt', 'rtf'].includes(ext) ? '📘'
+          : ['xls', 'xlsx', 'csv'].includes(ext) ? '📗' : '📄';
+        return `<div class="ev-item doc">
+          <a class="doc-enlace" href="${url}" target="_blank" rel="noopener"
+             title="${esc(n)}">
+            <span class="doc-ico">${icono}</span>
+            <span class="doc-nom">${esc(recortar(n, 40))}</span>
+          </a>
+          <div class="pie">${cel ? '<span class="tiny">📱</span>' : ''}${acciones}</div></div>`;
+      }
 
       const dur = e.duracion ? `${Math.floor(e.duracion / 60)}:${String(e.duracion % 60).padStart(2, '0')}` : '';
       return `<div class="ev-item audio">
