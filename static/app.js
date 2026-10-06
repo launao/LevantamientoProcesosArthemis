@@ -2101,7 +2101,7 @@ function modalZip(campo) {
       }
 
       btn.textContent = `Subiendo ${buenas.length}…`;
-      const { hechas, fallidas } = await porTandas(
+      const { hechas, fallidas, ultimoFallo } = await porTandas(
         buenas, box, `/api/procesos/${S.procId}/evidencias/lote`,
         'Subiendo los documentos', campo ? { campo } : null);
 
@@ -2109,7 +2109,8 @@ function modalZip(campo) {
       info.innerHTML = `<div class="aviso-ia ${hechas ? 'ok' : 'error'}">
         Entraron <b>${hechas} archivo(s)</b> de ${buenas.length}.
         ${total ? `<div class="tiny" style="margin-top:8px">
-          Quedaron fuera ${total}${fallidas ? ` (${fallidas} por fallos al subir)` : ''}:<br>
+          Quedaron fuera ${total}${fallidas ? ` (${fallidas} por fallos al subir)` : ''}.
+          ${fallidas ? `<br><b>El servidor dijo:</b> ${esc(ultimoFallo)}` : ''}<br>
           ${fuera.slice(0, 10).map(x => esc(x.nombre) + ' — ' + esc(x.por_que)).join('<br>')}
           ${fuera.length > 10 ? '<br>…y ' + (fuera.length - 10) + ' más' : ''}
         </div>` : ''}
@@ -7612,7 +7613,7 @@ async function porTandas(fotos, box, url, rotulo, extra) {
   if (cual) cual.textContent = `${rotulo}: ${fotos.length} foto(s)`;
   decir(`0 de ${fotos.length}`);
 
-  let hechas = 0, fallidas = 0;
+  let hechas = 0, fallidas = 0, ultimoFallo = '';
   for (let i = 0; i < fotos.length; i += FOTOS_POR_TANDA) {
     const crudas = fotos.slice(i, i + FOTOS_POR_TANDA);
     decir(`${hechas} de ${fotos.length} · preparando las siguientes…`);
@@ -7634,10 +7635,15 @@ async function porTandas(fotos, box, url, rotulo, extra) {
                 - (d.rechazadas ? d.rechazadas.length : 0);
         fallidas += (d.rechazadas || []).length;
         bien = true;
-      } catch (_) {
+      } catch (e) {
         // Una tanda que falla no debe tumbar las quinientas: se reintenta
         // y, si no, se sigue con las demás. La espera crece porque si el
         // servidor se está reiniciando, insistir enseguida no ayuda.
+        //
+        // Se guarda lo que contestó el servidor: sin eso, «no se pudieron»
+        // era todo lo que había para averiguar qué pasó, y no alcanza.
+        ultimoFallo = (e && (e.detalle || e.error))
+          || (e && e.message) || 'sin respuesta del servidor';
         if (intento === 3) fallidas += tanda.length;
         else await new Promise(r => setTimeout(r, 2500 * intento));
       }
@@ -7648,7 +7654,8 @@ async function porTandas(fotos, box, url, rotulo, extra) {
     decir(`${hechas} de ${fotos.length} subidas`
           + (fallidas ? ` · ${fallidas} no se pudieron` : ''));
   }
-  return { hechas, fallidas };
+  if (fallidas) console.warn('[subida] último fallo:', ultimoFallo);
+  return { hechas, fallidas, ultimoFallo };
 }
 
 async function subirFotosSueltas(procesoId, fotos, box) {

@@ -2274,7 +2274,17 @@ def _guardar_media_bytes(pid, datos, ctype, nombre=""):
     sacado de un video. Devuelve su id, o el del que ya estaba si es
     idéntico: reprocesar un video no debe duplicar las fotos."""
     firma = hashlib.sha1(datos).hexdigest()
-    previo = D.row("SELECT id FROM media WHERE sha1=? AND proceso_id IS ?", (firma, pid))
+    # Dos consultas en vez de «proceso_id IS ?»: ese IS compara valores en
+    # SQLite pero en PostgreSQL solo admite NULL, así que con un proceso de
+    # verdad era un error de sintaxis y fallaba cada archivo que se subía.
+    # No se ve probando en local, y es la causa de que un lote entero se
+    # cayera entero.
+    if pid is None:
+        previo = D.row("SELECT id FROM media WHERE sha1=? AND proceso_id IS NULL",
+                       (firma,))
+    else:
+        previo = D.row("SELECT id FROM media WHERE sha1=? AND proceso_id=?",
+                       (firma, pid))
     if previo:
         return previo["id"]
 
