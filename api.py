@@ -2784,14 +2784,29 @@ TOPE_AUDIO_TOTAL = 12 * 1024 * 1024
 
 
 def datos_informe(token, embebido=False):
+    """El informe que se abre con un enlace compartido."""
     t = D.row("SELECT * FROM share_tokens WHERE token=? AND activo", (token,))
     if not t:
         return None
-    p = D.row("SELECT * FROM procesos WHERE id=?", (t["proceso_id"],))
+    D.execute("UPDATE share_tokens SET vistas = vistas + 1 WHERE token=?", (token,))
+    return datos_de_proceso(t["proceso_id"], embebido, token)
+
+
+def datos_de_proceso(pid, embebido=False, token=None):
+    """Lo mismo, pero por el id del proceso.
+
+    Separado del enlace compartido porque hace falta para el paquete con
+    todos los procesos: ahí no hay token que valer, y duplicar este armado
+    habría dejado dos informes que se van pareciendo cada vez menos.
+    """
+    p = D.row("SELECT * FROM procesos WHERE id=?", (pid,))
     if not p:
         return None
-
-    D.execute("UPDATE share_tokens SET vistas = vistas + 1 WHERE token=?", (token,))
+    t = {"proceso_id": pid}
+    # Sin token, las fotos solo pueden ir embebidas: no hay una dirección
+    # pública por la que pedirlas después.
+    if not token:
+        embebido = True
 
     plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
     respuestas = D.jload(p["respuestas"], {})

@@ -2587,8 +2587,16 @@ function vistaAjustes(m) {
         <h3>Exportar</h3>
         <p class="mut">Descarga lo levantado para el informe o para el equipo de desarrollo.</p>
         <div class="flex wrap" style="gap:8px;margin-top:10px">
+          <a class="btn p" href="/descargar/levantamiento.zip" id="bajarTodo">
+            ⤓ Todos los procesos, con sus fotos</a>
           <a class="btn" href="/api/export/csv">⤓ CSV de procesos</a>
           <a class="btn" href="/api/export/json">⤓ JSON completo</a>
+        </div>
+        <div class="tiny" style="margin-top:9px">
+          El primero trae un informe por proceso, con las fotos dentro, y un índice
+          que los enlaza. Se abre en cualquier computador sin internet y se puede
+          mandar por correo o archivar. Con muchos procesos tarda un rato y pesa
+          varios megas.
         </div>
       </div>
       <div class="card" style="margin-bottom:14px">

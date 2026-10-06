@@ -4,7 +4,10 @@ app.py — Punto de entrada de la aplicación.
 Local:      python app.py
 Railway:    gunicorn app:app   (ver Procfile)
 """
+import io
 import os
+import re
+import zipfile
 from datetime import datetime, timedelta
 
 from flask import (Flask, render_template, redirect, url_for, jsonify,
@@ -121,6 +124,74 @@ def crear_app():
                          for ch in (datos["proceso"]["nombre"] or "informe"))[:60].strip()
         return Response(html, mimetype="text/html; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="{nombre or "informe"}.html"'})
+
+    @app.get("/descargar/levantamiento.zip")
+    def descargar_todo():
+        """Todos los procesos levantados, en un solo archivo.
+
+        Va como zip con un informe por proceso más un índice que los
+        enlaza, porque es lo que de verdad se necesita: poder abrirlo en
+        cualquier computador, mandarlo por correo o archivarlo, sin
+        depender de que la app siga en pie.
+
+        Las fotos van dentro de cada informe. Pesa más, pero un informe
+        que apunta a fotos que viven en el servidor deja de servir el día
+        que el servidor no esté, que es justo cuando hace falta.
+        """
+        from api import datos_de_proceso, usuario_actual
+        from auth import login_required as _lr          # noqa: F401
+        import db as D
+
+        u = usuario_actual()
+        if not u:
+            return redirect("/login")
+
+        # Quién ve qué: una analista se lleva lo suyo; el admin, el lector
+        # y la clínica se llevan todo. Es la misma regla de la pantalla.
+        solo_mios = u["rol"] not in ("admin", "lector", "clinica")
+        estado = (request.args.get("estado") or "").strip()
+        area = (request.args.get("area") or "").strip()
+
+        sql = "SELECT id, codigo, nombre, area, estado FROM procesos WHERE COALESCE(eliminado,0)=0"
+        args = []
+        if solo_mios:
+            sql += " AND responsable_id=?"
+            args.append(u["id"])
+        if estado:
+            sql += " AND estado=?"
+            args.append(estado)
+        if area:
+            sql += " AND area=?"
+            args.append(area)
+        # Los que no tienen código van al final: un código vacío ordena
+        # primero y dejaba «Sin código» abriendo el paquete, que es justo
+        # lo contrario de lo que uno espera encontrar de primero.
+        filas = D.rows(sql + " ORDER BY CASE WHEN COALESCE(codigo,'')='' THEN 1 ELSE 0 END,"
+                             " codigo, nombre", tuple(args))
+
+        if not filas:
+            return render_template("informe.html", datos=None), 404
+
+        buf = io.BytesIO()
+        indice = []
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for i, f in enumerate(filas, 1):
+                datos = datos_de_proceso(f["id"], embebido=True)
+                if not datos:
+                    continue
+                html = render_template("informe.html", datos=datos)
+                nombre = _nombre_archivo(f["codigo"], f["nombre"], i)
+                z.writestr(nombre, html)
+                indice.append({"archivo": nombre, "codigo": f["codigo"] or "",
+                               "nombre": f["nombre"], "area": f["area"] or "",
+                               "estado": f["estado"] or ""})
+            z.writestr("00-indice.html", _html_indice(indice))
+
+        buf.seek(0)
+        sello = datetime.now().strftime("%Y-%m-%d")
+        return Response(buf.getvalue(), mimetype="application/zip", headers={
+            "Content-Disposition":
+                f'attachment; filename="levantamiento-{sello}.zip"'})
 
     @app.get("/descargar/preparar-entrevistas.zip")
     def bajar_preparador():
@@ -269,3 +340,53 @@ app = crear_app()
 if __name__ == "__main__":
     puerto = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=puerto, debug=os.environ.get("DEBUG") == "1")
+
+
+def _nombre_archivo(codigo, nombre, i):
+    """Un nombre de archivo que ordena solo y se puede abrir en cualquier
+    sistema: sin tildes raras, sin barras, sin dos puntos."""
+    base = f"{(codigo or '').strip()} {nombre or ''}".strip() or f"proceso-{i}"
+    limpio = re.sub(r"[^\w \-]", "", base, flags=re.UNICODE).strip()[:70]
+    return f"{i:02d}-{limpio or 'proceso'}.html"
+
+
+def _html_indice(filas):
+    """La portada del paquete: la lista de lo que hay, con sus enlaces.
+
+    Sin esto, quien reciba el zip se encuentra sesenta archivos sueltos y
+    tiene que abrirlos uno por uno para saber qué hay dentro.
+    """
+    hoy = datetime.now().strftime("%d/%m/%Y")
+    por_area = {}
+    for f in filas:
+        por_area.setdefault(f["area"] or "Sin área", []).append(f)
+
+    bloques = []
+    for area in sorted(por_area):
+        items = "".join(
+            f'<li><a href="{f["archivo"]}">'
+            f'<b>{f["codigo"]}</b> {f["nombre"]}</a>'
+            f'<span class="e">{f["estado"].replace("_", " ")}</span></li>'
+            for f in por_area[area])
+        bloques.append(f"<h2>{area}</h2><ul>{items}</ul>")
+
+    return f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Levantamiento de procesos</title>
+<style>
+ body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:860px;
+   margin:40px auto;padding:0 20px;color:#112236;line-height:1.5}}
+ h1{{margin:0 0 4px}} .sub{{color:#5b6b7c;margin-bottom:28px}}
+ h2{{font-size:17px;margin:28px 0 8px;padding-bottom:6px;border-bottom:1.5px solid #e3e8ee}}
+ ul{{list-style:none;padding:0;margin:0}}
+ li{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f0f3f6}}
+ li a{{flex:1;color:#112236;text-decoration:none}}
+ li a:hover{{text-decoration:underline}}
+ .e{{font-size:12.5px;color:#5b6b7c;background:#f3f6f9;padding:2px 9px;border-radius:99px}}
+</style></head><body>
+<h1>Levantamiento de procesos</h1>
+<div class="sub">Clínica Centro Ocular Dr. Rincón · {len(filas)} procesos · {hoy}</div>
+{"".join(bloques)}
+<p class="sub" style="margin-top:34px">Cada archivo lleva sus fotos dentro:
+funcionan sin internet y se pueden guardar o reenviar tal cual.</p>
+</body></html>"""
