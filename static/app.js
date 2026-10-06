@@ -4885,6 +4885,15 @@ function vistaRevision(m) {
   if (S.filtroAreaRev === '__sin__') lista = lista.filter(p => !(p.area || '').trim());
   else if (S.filtroAreaRev) lista = lista.filter(p => (p.area || '').trim() === S.filtroAreaRev);
 
+  // Buscar por código o por nombre. Con cincuenta y siete esperando, el
+  // área sola no alcanza para llegar a uno concreto.
+  const q = (S.buscaRev || '').trim().toLowerCase();
+  if (q) lista = lista.filter(p =>
+    (p.codigo || '').toLowerCase().includes(q)
+    || (p.nombre || '').toLowerCase().includes(q)
+    || (p.area || '').toLowerCase().includes(q)
+    || nombrePersona(p.responsable).toLowerCase().includes(q));
+
   m.innerHTML = `
   <div class="topbar"><h1>Revisión</h1><div class="sp"></div>
     <div class="tabs">
@@ -4895,6 +4904,8 @@ function vistaRevision(m) {
       <button class="tab ${S.filtroRev === 'devueltos' ? 'on' : ''}" data-rev="devueltos">
         Devueltos <span class="tiny">${devueltos.length}</span></button>
     </div>
+    <input type="search" id="buscaRev" placeholder="Buscar por código o nombre"
+           value="${esc(S.buscaRev || '')}" style="max-width:260px">
     <select id="areaRev" title="Filtrar por área">
       <option value="">Todas las áreas</option>
       ${areas.map(a => `<option value="${esc(a)}" ${
@@ -4906,11 +4917,14 @@ function vistaRevision(m) {
     <a class="btn sm" href="#/mapa">⤳ Ver el mapa</a>
   </div>
 
-  ${S.filtroAreaRev ? `<div class="flex" style="gap:10px;margin-bottom:12px">
-    <span class="tiny">Viendo solo <b>${esc(S.filtroAreaRev === '__sin__'
-      ? 'los que no tienen área' : S.filtroAreaRev)}</b>:
+  ${(S.filtroAreaRev || q) ? `<div class="flex" style="gap:10px;margin-bottom:12px">
+    <span class="tiny">Viendo ${[
+        S.filtroAreaRev ? '<b>' + esc(S.filtroAreaRev === '__sin__'
+          ? 'los que no tienen área' : S.filtroAreaRev) + '</b>' : '',
+        q ? 'lo que dice «<b>' + esc(S.buscaRev) + '</b>»' : ''
+      ].filter(Boolean).join(' y ')}:
       ${lista.length} de ${(listas[S.filtroRev] || []).length}</span>
-    <button class="btn sm" id="limpiarArea">Ver todas las áreas</button>
+    <button class="btn sm" id="limpiarArea">Quitar los filtros</button>
   </div>` : ''}
 
   <div class="card barra-lote">
@@ -4922,10 +4936,10 @@ function vistaRevision(m) {
     <button class="btn p" id="analizarLote" disabled>✨ Analizar los seleccionados</button>
   </div>
 
-  ${!lista.length ? (S.filtroAreaRev
+  ${!lista.length ? ((S.filtroAreaRev || q)
     ? `<div class="empty"><span class="e">∅</span>
-        Nada de esta área en esta pestaña.<br>
-        <span class="tiny">Prueba con otra área, o quita el filtro.</span></div>`
+        Nada que coincida en esta pestaña.<br>
+        <span class="tiny">Prueba en otra pestaña, o quita los filtros.</span></div>`
     : (S.filtroRev === 'esperando'
       ? `<div class="empty"><span class="e">✓</span>
           Nada esperando. Cuando una analista pulse Enviar, el proceso aparece aquí.</div>`
@@ -4944,6 +4958,13 @@ function vistaRevision(m) {
     vistaRevision(m);
   });
 
+  const caja = document.getElementById('buscaRev');
+  if (caja) caja.oninput = () => {
+    S.buscaRev = caja.value;
+    S.selLote = [];
+    redibujarConFoco('buscaRev', () => vistaRevision(m));
+  };
+
   const selArea = document.getElementById('areaRev');
   if (selArea) selArea.onchange = () => {
     S.filtroAreaRev = selArea.value;
@@ -4954,7 +4975,7 @@ function vistaRevision(m) {
   };
   const limpiar = document.getElementById('limpiarArea');
   if (limpiar) limpiar.onclick = () => {
-    S.filtroAreaRev = ''; S.selLote = []; vistaRevision(m);
+    S.filtroAreaRev = ''; S.buscaRev = ''; S.selLote = []; vistaRevision(m);
   };
 
   S.selLote = S.selLote || [];
