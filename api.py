@@ -2172,19 +2172,72 @@ def restaurar_proceso(pid):
     return jsonify({"ok": True})
 
 
+# Cuánto dura una «sesión de trabajo» para el historial. Mientras la
+# misma persona siga editando dentro de esta ventana, no se guarda una
+# versión nueva: la que ya hay guarda cómo estaba ANTES de que empezara,
+# que es a lo que uno quiere volver.
+MINUTOS_SESION = int(os.environ.get("MINUTOS_VERSION", "45"))
+
+# Estos momentos se guardan siempre, pase lo que pase: son los cambios
+# grandes, de los que uno sí quiere poder volver.
+HITOS = ("antes de volcar la entrevista grabada", "antes de archivar",
+         "antes de restaurar", "antes de aplicar conexiones del análisis")
+
+
+def _a_utc(valor):
+    """Una fecha de la base, venga como venga, en UTC y sin zona.
+
+    PostgreSQL devuelve «2026-10-08 00:25:53+00:00» y SQLite
+    «2026-10-08T00:25:53». Comparar una con zona contra una sin zona
+    revienta, y el error se tragaba el agrupado de versiones justo en
+    producción, que es donde hacía falta.
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, datetime):
+        d = valor
+    else:
+        try:
+            d = datetime.fromisoformat(str(valor).replace("Z", "+00:00")
+                                       .replace(" ", "T"))
+        except (ValueError, TypeError):
+            return None
+    return d.replace(tzinfo=None) - (d.utcoffset() or timedelta(0)) \
+        if d.tzinfo else d
+
+
 def _guardar_version(pid, uid, motivo):
     """Guarda cómo estaba el proceso ANTES de este cambio.
 
-    Se conservan las últimas 40 versiones de cada proceso. Suficiente para
-    deshacer un borrado accidental sin llenar la base de historia inútil.
+    Se conservan las últimas 40 versiones de cada proceso.
+
+    Lo delicado aquí es cada cuánto se guarda. La app guarda sola un
+    segundo después de dejar de teclear, así que escribir una frase
+    producía veintidós versiones de medio renglón cada una: las cuarenta
+    ranuras se gastaban en minutos y el historial, que debería alcanzar
+    para volver a como estaba la semana pasada, no pasaba de los últimos
+    dos minutos de escritura.
+
+    Por eso se agrupa por sesión: mientras la misma persona siga editando
+    dentro de la ventana, la versión que ya está guardada —la de antes de
+    que empezara— sigue valiendo y no se añade otra.
     """
     actual = D.row("SELECT respuestas, nombre FROM procesos WHERE id=?", (pid,))
     if not actual:
         return
-    ultima = D.row("SELECT respuestas FROM versiones WHERE proceso_id=? "
-                   "ORDER BY creado DESC LIMIT 1", (pid,))
-    if ultima and ultima["respuestas"] == actual["respuestas"]:
+    ultima = D.row("SELECT respuestas, usuario_id, motivo, creado FROM versiones "
+                   "WHERE proceso_id=? ORDER BY creado DESC LIMIT 1", (pid,))
+    # Un hito deja siempre su marca, aunque el contenido sea idéntico al
+    # de la versión anterior: quien mira el historial necesita ver que
+    # hubo un volcado o una restauración, no solo el texto.
+    if (ultima and ultima["respuestas"] == actual["respuestas"]
+            and motivo not in HITOS):
         return                      # nada cambió: no se guarda otra copia igual
+
+    if ultima and motivo not in HITOS and ultima["usuario_id"] == uid:
+        cuando = _a_utc(ultima["creado"])
+        if cuando and (datetime.utcnow() - cuando).total_seconds() < MINUTOS_SESION * 60:
+            return                  # misma persona, misma sesión de trabajo
 
     D.execute("INSERT INTO versiones (id, proceso_id, respuestas, nombre, usuario_id, motivo, creado) "
               "VALUES (?,?,?,?,?,?,?)",
@@ -2203,12 +2256,29 @@ def listar_versiones(pid):
     if not p or not _mio(p, usuario_actual()):
         return jsonify({"error": "no_es_tuyo"}), 403
     nombres = {u["id"]: u["nombre"] for u in D.rows("SELECT id, nombre FROM usuarios")}
-    vs = D.rows("SELECT id, nombre, usuario_id, motivo, creado FROM versiones "
-                "WHERE proceso_id=? ORDER BY creado DESC", (pid,))
-    return jsonify({"versiones": [
-        {"id": v["id"], "nombre": v["nombre"], "motivo": v["motivo"],
-         "por": nombres.get(v["usuario_id"], ""), "creado": str(v["creado"])}
-        for v in vs]})
+    vs = D.rows("SELECT id, nombre, usuario_id, motivo, creado, respuestas "
+                "FROM versiones WHERE proceso_id=? ORDER BY creado DESC", (pid,))
+    plantilla = D.jload(D.row("SELECT data FROM plantilla WHERE id=1")["data"], {})
+    etiquetas = {c["id"]: c["etiqueta"] for s in plantilla.get("secciones", [])
+                 for c in s.get("campos", [])}
+    ahora = D.jload(D.row("SELECT respuestas FROM procesos WHERE id=?",
+                          (pid,))["respuestas"], {})
+
+    salida = []
+    for i, v in enumerate(vs):
+        # Qué cambió entre esta versión y la siguiente hacia adelante: sin
+        # eso, el historial es una lista de horas y hay que recuperar a
+        # ciegas para saber qué había en cada una.
+        antes = D.jload(v["respuestas"], {})
+        despues = D.jload(vs[i - 1]["respuestas"], {}) if i else ahora
+        cambios = [etiquetas.get(k, k) for k in
+                   set(list(antes.keys()) + list(despues.keys()))
+                   if antes.get(k) != despues.get(k)]
+        salida.append({
+            "id": v["id"], "nombre": v["nombre"], "motivo": v["motivo"],
+            "por": nombres.get(v["usuario_id"], ""), "creado": str(v["creado"]),
+            "cambios": sorted(cambios)[:6], "cuantos": len(cambios)})
+    return jsonify({"versiones": salida})
 
 
 @api.post("/procesos/<pid>/versiones/<vid>/restaurar")

@@ -3526,7 +3526,9 @@ function conectarEditores(cont) {
    ═══════════════════════════════════════════════════════════════ */
 async function modalHistorial(p) {
   modal(`<h3>Historial de ${esc(p.nombre)}</h3>
-    <p class="mut" style="margin-top:-6px">Cada vez que alguien guarda, se conserva cómo estaba antes. Si se borró algo sin querer, aquí se recupera.</p>
+    <p class="mut" style="margin-top:-6px">Cómo estaba el proceso antes de cada sesión
+      de trabajo. Si se borró algo sin querer, aquí se recupera. Se guardan las
+      últimas 40; las fotos y los audios no se tocan al recuperar.</p>
     <div id="histBox"><div class="mut">Buscando…</div></div>
     <div class="flex" style="margin-top:14px"><button class="btn right" data-cerrar>Cerrar</button></div>`,
   async box => {
@@ -3539,7 +3541,10 @@ async function modalHistorial(p) {
       }
       caja.innerHTML = `<table class="t"><tbody>${d.versiones.map((v, i) => `<tr>
         <td><b>${esc(fechaLarga(v.creado))}</b>
-          <div class="tiny">${esc(v.por || '')} · ${esc(v.motivo || '')}${i === 0 ? ' · la más reciente' : ''}</div></td>
+          <div class="tiny">${esc(v.por || '')} · ${esc(v.motivo || '')}${i === 0 ? ' · la más reciente' : ''}</div>
+          ${v.cuantos ? `<div class="tiny" style="color:var(--ink-2);margin-top:3px">
+            Después de esto cambió: ${v.cambios.map(esc).join(', ')}${
+              v.cuantos > v.cambios.length ? ` y ${v.cuantos - v.cambios.length} cosa(s) más` : ''}</div>` : ''}</td>
         <td style="width:110px"><button class="btn sm" data-ver="${v.id}">Recuperar</button></td>
       </tr>`).join('')}</tbody></table>`;
 
